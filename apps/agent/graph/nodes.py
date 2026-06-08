@@ -1,14 +1,23 @@
-"""The five agent nodes of the QA pipeline: planner → router → retriever → verifier →
-synthesizer. Each node owns one LLM persona (a prompt in ``apps.agent.prompts``), builds
-its prompt fresh from :class:`AgentState`, and emits ONE JSON object. The deterministic
-wiki reads (``lookup``/``open_page`` in ``apps.agent.io``) do all retrieval — the LLMs
-only route and write prose. The shared vLLM has no native tool-calling, hence the
+"""The agent pipeline: planner → (fan-out) solve → synthesizer.
+
+The planner splits the question; each sub-question is dispatched to its own ``solve`` branch
+(LangGraph ``Send``) and the branches run **concurrently**. A ``solve`` branch runs the three
+sub-agents that used to be separate nodes — router → retriever → verifier — as a plain Python
+retry loop, emitting their trace entries so all five personas stay visible. The retriever
+itself fans out one LLM call per page. Every LLM call passes through ``_LLM_SEM`` so no more
+than ``STELLA_FANOUT`` (default 4) requests hit the shared vLLM at once.
+
+The deterministic wiki reads (``lookup``/``open_page``/``trace_links``) do all retrieval — the
+LLMs only route and write prose. The shared vLLM has no native tool-calling, hence the
 JSON-per-turn (ReAct-style) contract.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from src.stella_kb.llm import chat
 
@@ -22,7 +31,9 @@ RETRIEVER = load_prompt("retriever")
 VERIFIER = load_prompt("verifier")
 SYNTHESIZER = load_prompt("synthesizer")
 
-_MAX_RETRY = 2  # verifier→router retries allowed per sub-question
+_MAX_RETRY = 2  # router↻retriever retries allowed per sub-question
+_FANOUT = max(1, int(os.getenv("STELLA_FANOUT", "4")))  # concurrent LLM requests cap
+_LLM_SEM = threading.Semaphore(_FANOUT)  # guards the shared guest vLLM from overload
 
 
 def parse_action(raw: str) -> dict | None:
@@ -41,154 +52,160 @@ def parse_action(raw: str) -> dict | None:
 
 
 def _ask(system: str, user: str, max_tokens: int) -> tuple[dict | None, str]:
-    """One-shot LLM call: system + user → (parsed JSON action, raw text)."""
-    raw = chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=max_tokens,
-        timeout=120.0,
-    )
+    """One-shot LLM call: system + user → (parsed JSON action, raw text).
+
+    Acquires ``_LLM_SEM`` so concurrent branches/pages never exceed the request cap — vLLM
+    continuous-batches whatever does land at once, which is where the speed-up comes from.
+    """
+    with _LLM_SEM:
+        raw = chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=max_tokens,
+            timeout=120.0,
+        )
     return parse_action(raw), raw
 
 
-def _entry(state: AgentState, agent: str, action: str, arg: str, thought: str) -> list:
-    """One trace record as a single-item delta; the ``trace`` reducer appends it.
-
-    ``step`` is the running entry count read from the current trace (the pipeline is
-    linear, so this index is deterministic)."""
-    step = len(state.get("trace", []))
-    return [{"step": step, "agent": agent, "action": action, "arg": arg, "thought": thought}]
+def _rec(sub: int, seq: int, agent: str, action: str, arg: str, thought: str) -> dict:
+    """One trace record. ``sub``/``seq`` are the branch index and intra-branch order; the
+    global ``step`` is reassigned in ``core`` after the parallel branches merge."""
+    return {"step": seq, "sub": sub, "agent": agent,
+            "action": action, "arg": arg, "thought": thought}
 
 
 # --------------------------------------------------------------------------- planner
 def planner_node(state: AgentState) -> AgentState:
-    """Break the question into a minimal ordered list of sub-questions (usually one)."""
+    """Break the question into a minimal list of sub-questions (each fans out to a branch)."""
     user = (f"INDEX:\n{state['index_md']}\n\nQuestion: {state['question']}\n\n"
             "Return the plan JSON.")
     act, _ = _ask(PLANNER, user, 600)
     plan = [p for p in ((act or {}).get("plan") or []) if isinstance(p, dict) and p.get("ask")]
     if not plan:  # parse miss / empty → fall back to a single pass-through sub-question
         plan = [{"ask": state["question"], "hint_terms": []}]
-    for p in plan:  # normalize the routing controls so downstream nodes can rely on them
+    for p in plan:  # normalize the routing controls so the solve branch can rely on them
         p["mode"] = "trace" if p.get("mode") == "trace" else "lookup"
         p["direction"] = "up" if p.get("direction") == "up" else "down"
     if state.get("verbose"):
-        print(f"[planner] {len(plan)} sub-question(s)")
+        print(f"[planner] {len(plan)} sub-question(s) → fan out")
     return {
-        "plan": plan, "cursor": 0, "retries": 0, "tried_pages": [], "pages": [],
-        "trace": _entry(state, "planner", "plan",
-                        f"{len(plan)} sub-Q", (act or {}).get("thought", "")),
+        "plan": plan,
+        "trace": [_rec(-1, 0, "planner", "plan",
+                       f"{len(plan)} sub-Q", (act or {}).get("thought", ""))],
     }
 
 
-# ---------------------------------------------------------------------------- router
-def router_node(state: AgentState, index: dict) -> AgentState:
-    """Pick the wiki page(s) for the current sub-question (whitelist-guarded to the INDEX)."""
-    sub = state["plan"][state["cursor"]]
+# ---------------------------------------------------------- per-sub-question sub-agents
+def _route(sub: dict, tried: list, index: dict) -> tuple[list, dict | None, str]:
+    """Pick the wiki page(s) for one sub-question; on a trace sub-Q expand along the DAG."""
     hints = sub.get("hint_terms") or []
     lookups = "\n\n".join(lookup(index, t) for t in hints) if hints else "(no hint terms)"
-    tried = state.get("tried_pages", [])
     avoid = (f"\nAlready tried for this sub-question and found insufficient — pick a "
              f"DIFFERENT page unless re-reading is clearly justified: {tried}") if tried else ""
-    user = (f"INDEX:\n{state['index_md']}\n\nLookup results:\n{lookups}\n\n"
+    user = (f"INDEX:\n{sub['_index_md']}\n\nLookup results:\n{lookups}\n\n"
             f"Sub-question: {sub['ask']}{avoid}\n\nReturn the pages JSON.")
     act, _ = _ask(ROUTER, user, 400)
     valid = set(index.get("pages", {}).keys())
-    picks = [p for p in ((act or {}).get("pages") or []) if p in valid]  # drop hallucinated pages
+    picks = [p for p in ((act or {}).get("pages") or []) if p in valid]  # drop hallucinations
 
-    # provenance hop: from the focal page, walk the sheet-level formula DAG and pull in the
-    # pages along the chain so the retriever reads the whole path in one pass.
-    out: dict = {}
+    path = None
     if sub.get("mode") == "trace" and picks:
         direction = sub.get("direction", "down")
         chain = trace_links(index, picks[0], direction=direction)
         chain_pages = [c["sheet"] for c in chain
                        if c["has_page"] and c["sheet"] not in picks][:5]
-        out["paths"] = [{"ask": sub["ask"], "direction": direction,
-                         "start": picks[0], "chain": chain}]
+        path = {"ask": sub["ask"], "direction": direction, "start": picks[0], "chain": chain}
         picks = picks + chain_pages
-
-    if state.get("verbose"):
-        tag = f" [trace {sub.get('direction')}]" if sub.get("mode") == "trace" else ""
-        print(f"[router] sub#{state['cursor']}{tag} -> {picks}")
-    return {
-        "pages": picks,
-        "trace": _entry(state, "router", "route",
-                        ", ".join(picks) or "(none)", (act or {}).get("thought", "")),
-        **out,
-    }
+    return picks, path, (act or {}).get("thought", "")
 
 
-# ------------------------------------------------------------------------- retriever
-def retriever_node(state: AgentState) -> AgentState:
-    """Open the chosen page(s) and extract the line items relevant to the sub-question."""
-    ask = state["plan"][state["cursor"]]["ask"]
-    pages = state.get("pages", [])
+def _retrieve(ask: str, pages: list) -> tuple[list, str]:
+    """Open the pages and extract evidence — one LLM call PER PAGE, fanned out concurrently."""
+    if not pages:
+        return [], "(no pages selected)"
     texts = {p: open_page(p) for p in pages}
-    blob = "\n\n".join(texts.values()) if texts else "(no pages selected)"
-    user = f"Sub-question: {ask}\n\nWIKI PAGES:\n{blob}\n\nReturn the evidence JSON."
-    act, _ = _ask(RETRIEVER, user, 800)
 
-    ev: list[dict] = []
-    for e in (act or {}).get("evidence") or []:
-        if not isinstance(e, dict):
-            continue
-        cell = str(e.get("cell", ""))
-        celltok = cell.split("!")[-1]  # soft guard: the cell must appear on an opened page
-        if celltok and any(celltok in t for t in texts.values()):
-            ev.append({"page": e.get("page", ""), "cell": cell,
-                       "term": e.get("term", ""), "value": str(e.get("value", "")), "ask": ask})
-    if state.get("verbose"):
-        print(f"[retriever] +{len(ev)} evidence from {pages}")
-    return {
-        "evidence": ev,                                           # reducer appends to the run
-        "tried_pages": list(state.get("tried_pages", [])) + pages,  # overwrite channel: extend by hand
-        "steps": state.get("steps", 0) + 1,
-        "trace": _entry(state, "retriever", "read",
-                        f"{len(ev)} fact(s) from {pages}", (act or {}).get("thought", "")),
-    }
+    def extract(page: str) -> list:
+        user = (f"Sub-question: {ask}\n\nWIKI PAGE:\n{texts[page]}\n\n"
+                "Return the evidence JSON.")
+        act, _ = _ask(RETRIEVER, user, 800)
+        out = []
+        for e in (act or {}).get("evidence") or []:
+            if not isinstance(e, dict):
+                continue
+            cell = str(e.get("cell", ""))
+            celltok = cell.split("!")[-1]  # soft guard: the cell must be on THIS page
+            if celltok and celltok in texts[page]:
+                out.append({"page": e.get("page", "") or page, "cell": cell,
+                            "term": e.get("term", ""), "value": str(e.get("value", "")),
+                            "ask": ask})
+        return out
+
+    with ThreadPoolExecutor(max_workers=min(_FANOUT, len(pages))) as ex:
+        per_page = list(ex.map(extract, pages))
+    ev = [e for page_ev in per_page for e in page_ev]
+    return ev, f"{len(ev)} fact(s) from {pages}"
 
 
-# -------------------------------------------------------------------------- verifier
-def verifier_node(state: AgentState) -> AgentState:
-    """Judge whether the sub-question is answered; route to retry / next / synthesize."""
-    cur = state["cursor"]
-    sub = state["plan"][cur]
-    ask = sub["ask"]
-    ev = [e for e in state.get("evidence", []) if e.get("ask") == ask]
-    ev_txt = "\n".join(f"- {e['term']} = {e['value']}  ({e['cell']}, {e['page']})" for e in ev) or "(no evidence)"
-    # a trace sub-question is answered by the deterministic chain, not by cell density — if a
-    # non-empty provenance path was found, accept it without an LLM gap-check / retry loop.
-    traced = sub.get("mode") == "trace" and any(
-        p.get("ask") == ask and p.get("chain") for p in state.get("paths", []))
-    if traced:
-        verdict, act = "ok", {"reason": "provenance chain traced"}
-    else:
-        user = f"Sub-question: {ask}\n\nEvidence:\n{ev_txt}\n\nReturn the verdict JSON."
-        act, _ = _ask(VERIFIER, user, 300)
-        verdict = ((act or {}).get("verdict") or ("ok" if ev else "gap")).lower()
-    retries = state.get("retries", 0)
-    over_budget = state.get("steps", 0) >= state["max_steps"]
-    last = cur >= len(state["plan"]) - 1
+def _verify(sub: dict, ev: list, path: dict | None) -> tuple[str, str]:
+    """Judge whether the sub-question is answered. A traced chain is accepted as-is."""
+    if sub.get("mode") == "trace" and path and path.get("chain"):
+        return "ok", "provenance chain traced"
+    ev_txt = "\n".join(f"- {e['term']} = {e['value']}  ({e['cell']}, {e['page']})"
+                       for e in ev) or "(no evidence)"
+    user = f"Sub-question: {sub['ask']}\n\nEvidence:\n{ev_txt}\n\nReturn the verdict JSON."
+    act, _ = _ask(VERIFIER, user, 300)
+    verdict = ((act or {}).get("verdict") or ("ok" if ev else "gap")).lower()
+    return verdict, (act or {}).get("reason", "")
 
-    if verdict == "gap" and not over_budget and retries < _MAX_RETRY:
-        route, out = "retry", {"retries": retries + 1}            # same sub-Q, avoid tried pages
-    elif last:
-        route, out = "synthesize", {}
-    else:
-        route, out = "next", {"cursor": cur + 1, "retries": 0, "tried_pages": [], "pages": []}
-    if state.get("verbose"):
-        print(f"[verifier] {verdict} -> {route}")
-    return {
-        "route": route,
-        "trace": _entry(state, "verifier", "verify",
-                        f"{verdict} -> {route}", (act or {}).get("reason", "")),
-        **out,
-    }
+
+# ------------------------------------------------------------- solve (one fan-out branch)
+def solve_node(state: AgentState, index: dict) -> AgentState:
+    """Resolve ONE sub-question end to end (router → retriever → verifier, with retries).
+
+    Runs as a parallel ``Send`` branch; returns only the ``operator.add`` channels, which
+    LangGraph merges with the other branches at the barrier before the synthesizer."""
+    sub = dict(state["sub"])
+    sub["_index_md"] = state["index_md"]      # the router prompt needs the ToC
+    idx = state.get("sub_idx", 0)
+    max_steps = state.get("max_steps", 8)
+    verbose = state.get("verbose")
+
+    tried: list = []
+    evidence: list = []
+    paths: list = []
+    trace: list = []
+    reads = retries = seq = 0
+    while True:
+        picks, path, rthought = _route(sub, tried, index)
+        trace.append(_rec(idx, seq, "router", "route", ", ".join(picks) or "(none)", rthought))
+        seq += 1
+        if path:
+            paths.append(path)
+
+        ev, summary = _retrieve(sub["ask"], picks)
+        evidence += ev
+        tried += picks
+        reads += 1
+        trace.append(_rec(idx, seq, "retriever", "read", summary, ""))
+        seq += 1
+
+        verdict, reason = _verify(sub, ev, path)
+        trace.append(_rec(idx, seq, "verifier", "verify", verdict, reason))
+        seq += 1
+
+        if verdict != "gap" or retries >= _MAX_RETRY or reads >= max_steps:
+            break
+        retries += 1
+
+    if verbose:
+        tag = f"[trace {sub.get('direction')}]" if sub.get("mode") == "trace" else ""
+        print(f"[solve#{idx}]{tag} {sub['ask'][:42]} → {len(evidence)} ev, {len(paths)} path")
+    return {"evidence": evidence, "paths": paths, "steps": reads, "trace": trace}
 
 
 # ----------------------------------------------------------------------- synthesizer
 def synthesizer_node(state: AgentState) -> AgentState:
-    """Write the final cited Korean answer from the accumulated evidence only."""
+    """Write the final cited Korean answer from the accumulated evidence + traced paths."""
     ev = state.get("evidence", [])
     ev_txt = "\n".join(
         f"- [{e['ask']}] {e['term']} = {e['value']}  ({e['cell']}, page {e['page']})" for e in ev
@@ -209,5 +226,5 @@ def synthesizer_node(state: AgentState) -> AgentState:
     text = ((act or {}).get("text") or raw or "").strip() or "(빈 답변)"
     return {
         "answer": text,
-        "trace": _entry(state, "synthesizer", "answer", "", (act or {}).get("thought", "")),
+        "trace": [_rec(10**9, 0, "synthesizer", "answer", "", (act or {}).get("thought", ""))],
     }

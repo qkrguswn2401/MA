@@ -23,15 +23,24 @@ def _seed(question: str, max_steps: int, verbose: bool = False) -> AgentState:
     return {
         "question": question,
         "index_md": INDEX_MD.read_text(encoding="utf-8"),
-        "plan": [], "cursor": 0, "pages": [], "tried_pages": [], "evidence": [],
-        "paths": [], "trace": [], "steps": 0, "max_steps": max_steps, "retries": 0,
-        "verbose": verbose,
+        "plan": [], "evidence": [], "paths": [], "trace": [], "steps": 0,
+        "max_steps": max_steps, "verbose": verbose,
     }
 
 
-def _limit(max_steps: int) -> dict:
-    # per sub-question attempt = router+retriever+verifier (3 supersteps); give headroom
-    return {"recursion_limit": max_steps * 4 + 10}
+def _renumber(trace: list) -> list:
+    """Order the merged trace (planner → branches by sub-question → synthesizer) and assign a
+    sequential global ``step``. Parallel branches finish in nondeterministic order, so sort by
+    (branch index, intra-branch order) for a stable, readable trace."""
+    ordered = sorted(trace, key=lambda e: (e.get("sub", 0), e.get("step", 0)))
+    for i, e in enumerate(ordered):
+        e["step"] = i
+    return ordered
+
+
+def _limit() -> dict:
+    # planner → solve (fan-out, one superstep) → synthesizer = 3 supersteps; give headroom
+    return {"recursion_limit": 25}
 
 
 def run(question: str, max_steps: int = 8, verbose: bool = False,
@@ -42,10 +51,9 @@ def run(question: str, max_steps: int = 8, verbose: bool = False,
     of testing the index as a lookup table. Pass ``verbose=True`` to also print it.
     """
     app = build_app(index if index is not None else load_index())
-    final: dict[str, Any] = app.invoke(_seed(question, max_steps, verbose),
-                                       config=_limit(max_steps))
+    final: dict[str, Any] = app.invoke(_seed(question, max_steps, verbose), config=_limit())
     return {"answer": (final.get("answer") or "(no answer)").strip(),
-            "trace": final.get("trace", []),
+            "trace": _renumber(final.get("trace", [])),
             "steps": final.get("steps", 0)}
 
 
@@ -68,12 +76,14 @@ def stream_run(question: str, max_steps: int = 8, index: dict | None = None):
     app = build_app(index if index is not None else load_index())
     emitted = 0
     final: dict[str, Any] = {}
-    for state in app.stream(_seed(question, max_steps), config=_limit(max_steps),
+    for state in app.stream(_seed(question, max_steps), config=_limit(),
                             stream_mode="values"):
         final = state
         trace = state.get("trace", [])
         while emitted < len(trace):                       # surface each new decision
-            yield {"type": "step", **trace[emitted]}
+            e = dict(trace[emitted])
+            e["step"] = emitted                           # running global step (branches merge)
+            yield {"type": "step", **e}
             emitted += 1
     if final.get("answer"):
         yield {"type": "answer", "answer": final["answer"], "steps": final.get("steps", 0)}

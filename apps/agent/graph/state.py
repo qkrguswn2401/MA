@@ -1,32 +1,33 @@
-"""The LangGraph state shared across the planner → router → retriever → verifier →
-synthesizer pipeline. Plain dicts only (no langchain message objects); each node builds
-its own LLM prompt from these fields, so there is no single growing transcript."""
+"""The LangGraph state for the planner → (fan-out) solve → synthesizer pipeline.
+
+The planner splits the question into sub-questions; each is dispatched to its own ``solve``
+branch via the ``Send`` API and they run **concurrently** (bounded by a semaphore in
+``nodes.py``). Branches write only to the ``operator.add`` channels below, which LangGraph
+merges across the parallel barrier — so no branch clobbers another. Per-branch working state
+(picked pages, retries) stays local inside ``solve_node``; the only per-branch fields on the
+state are the ``Send`` payload (``sub``/``sub_idx``)."""
 
 from __future__ import annotations
 
 import operator
 from typing import Annotated, TypedDict
 
-# Two channels accumulate monotonically across the run — every node appends and nothing
-# ever resets them — so they carry an ``operator.add`` reducer: a node returns ONLY its
-# new items and LangGraph concatenates. The other list fields (``pages``/``tried_pages``)
-# are reset per sub-question, so they keep the default overwrite reducer (manual lists).
+# These channels accumulate across all parallel branches — each branch returns only its own
+# items and LangGraph concatenates (lists) / sums (steps). This is what makes the fan-out
+# safe: branches never overwrite a shared list, they append to it.
 
 
 class AgentState(TypedDict, total=False):
     """Running state threaded through the multi-agent graph."""
     question: str          # the original user question
     index_md: str          # the wiki INDEX (ToC) text, handed to planner/router
-    plan: list             # [{"ask": str, "hint_terms": [str, ...]}] from the planner
-    cursor: int            # which sub-question (index into plan) is being worked
-    pages: list            # page names the router picked for the current sub-question
-    tried_pages: list      # pages already read for the current sub-question (retry guard)
+    plan: list             # [{ask, hint_terms, mode, direction}] from the planner
+    sub: dict              # Send payload: the one sub-question this solve branch handles
+    sub_idx: int           # Send payload: that sub-question's index (for trace grouping)
     evidence: Annotated[list, operator.add]  # accumulated [{page, cell, term, value, ask}]
     paths: Annotated[list, operator.add]     # provenance chains [{ask, direction, chain:[...]}]
     answer: str            # the synthesizer's final Korean answer
-    trace: Annotated[list, operator.add]     # per-turn record [{step, agent, action, arg, thought}]
-    steps: int             # retriever reads consumed (the budget unit)
-    max_steps: int
-    retries: int           # verifier→router retries spent on the current sub-question
-    route: str             # verifier's conditional-edge decision
+    trace: Annotated[list, operator.add]     # per-turn record [{step, sub, agent, action, arg, thought}]
+    steps: Annotated[int, operator.add]      # retriever reads consumed across branches (work done)
+    max_steps: int         # per-branch retry/read budget
     verbose: bool

@@ -232,6 +232,9 @@ answers*. Keep evidence retrieval on the graph.
 - Model `gemma-4-31B-it` (Gemma instruct, TP=2 on GPUs 6–7, 262k ctx)
 - Served by another user (`donghan906`'s `Coinv`) — **guest resource**: keep load light, don't
   assume uptime. Sanity-check: `curl -s localhost:33333/v1/models`.
+- The agent fans out independent sub-questions (LangGraph `Send`) and per-page retrieval
+  concurrently; a semaphore caps in-flight requests to this server at `STELLA_FANOUT`
+  (default 4) so the guest vLLM isn't overloaded. vLLM continuous-batches what lands at once.
 
 Use the LLM only for *words → nodes* (`resolve_metric`, whitelist-guarded against
 `METRIC_IDS`) and final NL synthesis — never to fetch evidence (that stays graph traversal).
