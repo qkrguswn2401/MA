@@ -28,7 +28,7 @@ from pathlib import Path
 
 import openpyxl
 
-from .. import DATA_DIR, WORKBOOK
+from .. import DATA_DIR, WORKBOOK, FULL_WORKBOOK
 from ..graph.extract import build_dependency_graph
 from .compile import sheet_links, value_series
 
@@ -38,43 +38,44 @@ OUT_JSON = Path("data/wiki/index.json")
 OUT_MD = Path("data/wiki/INDEX.md")
 
 # `_raw.xlsx` (the canonical WORKBOOK) drops the Fin.Model engine/source sheets, so the
-# curated `성과보수, 배당금` page is sourced from the full `(Updated)` workbook instead.
-# Read just that one sheet's values from there so its data_status reflects reality.
-FULL_WORKBOOK = str(
-    DATA_DIR / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated).xlsx"
-)
+# curated `성과보수, 배당금` page is sourced from the full `(Updated)` workbook (FULL_WORKBOOK)
+# instead. Read just that one sheet's values from there so its data_status reflects reality.
 FULL_ONLY_SHEETS = ("성과보수, 배당금",)
 
 
 def classify(name: str) -> dict:
     """Map a sheet name to its logical {section, group, kind, case} via name tokens."""
     if "EIU" in name:
-        return {"section": "거시 가정 (Macro · EIU)", "group": "EIU",
-                "kind": "macro", "case": None}
+        return {"section": "거시 가정 (Macro · EIU)", "group": "EIU", "kind": "macro", "case": None}
     if "장표" in name or name in {"Football Chart", "Bridge"}:
-        case = ("MGT" if name.endswith("_MGT")
-                else "DTT" if name.endswith("_DTT") else None)
+        case = "MGT" if name.endswith("_MGT") else "DTT" if name.endswith("_DTT") else None
         fam = name.split("장표")[0].strip() or name
-        return {"section": "PPT 장표 (Exhibits)", "group": fam,
-                "kind": "exhibit", "case": case}
-    for suf, kind in (("_비용", "비용 (costs)"), ("_거래내역", "거래내역 (ledger)"),
-                      ("_관리보수", "관리보수 (fee schedule)")):
+        return {"section": "PPT 장표 (Exhibits)", "group": fam, "kind": "exhibit", "case": case}
+    for suf, kind in (
+        ("_비용", "비용 (costs)"),
+        ("_거래내역", "거래내역 (ledger)"),
+        ("_관리보수", "관리보수 (fee schedule)"),
+    ):
         if name.endswith(suf):
-            return {"section": "Biz Plan (per-fund)", "group": name[:-len(suf)],
-                    "kind": kind, "case": None}
+            return {"section": "Biz Plan (per-fund)", "group": name[: -len(suf)], "kind": kind, "case": None}
     if name == "성과보수, 배당금":
-        return {"section": "Fin.Model (밸류에이션 엔진)", "group": "성과보수·배당금",
-                "kind": "fee model", "case": None}
+        return {
+            "section": "Fin.Model (밸류에이션 엔진)",
+            "group": "성과보수·배당금",
+            "kind": "fee model",
+            "case": None,
+        }
     if name == "IRR":
-        return {"section": "Biz Plan (per-fund)", "group": "IRR",
-                "kind": "return model", "case": None}
+        return {"section": "Biz Plan (per-fund)", "group": "IRR", "kind": "return model", "case": None}
     if name.startswith("4.1") or name == "PL_FY24(A)":
-        return {"section": "BSPL (재무제표)",
-                "group": "4.1 Centroid Investment Partners",
-                "kind": "statement", "case": None}
+        return {
+            "section": "BSPL (재무제표)",
+            "group": "4.1 Centroid Investment Partners",
+            "kind": "statement",
+            "case": None,
+        }
     if name.startswith("4.2"):
-        return {"section": "BSPL (재무제표)", "group": "4.2 Centroid Management",
-                "kind": "statement", "case": None}
+        return {"section": "BSPL (재무제표)", "group": "4.2 Centroid Management", "kind": "statement", "case": None}
     return {"section": "기타 (Other)", "group": name, "kind": None, "case": None}
 
 
@@ -100,15 +101,16 @@ def _desc(sheet: str) -> str | None:
         return None
     first = re.split(r"(?<=다)\.\s", para)[0].strip().rstrip(".") + "."
     first = re.sub(rf"^'{re.escape(sheet)}'\s*시트", "이 시트", first)  # drop redundant sheet name
-    return first[:160]
+    return first
 
 
 def load_all_values() -> dict[str, dict]:
     """``{sheet: {coord: value}}`` for the whole workbook in one open (for data status)."""
     wb = openpyxl.load_workbook(WORKBOOK, data_only=True, read_only=True)
-    out = {ws.title: {c.coordinate: c.value for row in ws.iter_rows()
-                      for c in row if c.value is not None}
-           for ws in wb.worksheets}
+    out = {
+        ws.title: {c.coordinate: c.value for row in ws.iter_rows() for c in row if c.value is not None}
+        for ws in wb.worksheets
+    }
     wb.close()
     # pull the engine sheets absent from `_raw` from the full workbook (exception)
     missing = [s for s in FULL_ONLY_SHEETS if s not in out]
@@ -117,8 +119,7 @@ def load_all_values() -> dict[str, dict]:
         for s in missing:
             if s in fwb.sheetnames:
                 ws = fwb[s]
-                out[s] = {c.coordinate: c.value for row in ws.iter_rows()
-                          for c in row if c.value is not None}
+                out[s] = {c.coordinate: c.value for row in ws.iter_rows() for c in row if c.value is not None}
         fwb.close()
     return out
 
@@ -141,7 +142,7 @@ def _data_status(items: list, vals: dict, axis_cols: dict) -> str:
             elif isinstance(v, str) and v.startswith("#"):  # #REF!, #DIV/0!, ...
                 ref += 1
     if real == 0 and ref > 0:
-        return "none (#REF!)"
+        return "none"
     if ref > 0:
         return "partial"
     return "full" if real > 0 else "—"
@@ -171,8 +172,7 @@ def build_sheet_dag(path: str) -> dict[str, dict[str, list[str]]]:
 
 
 def build_index() -> dict:
-    parsed = {p.stem: json.loads(p.read_text(encoding="utf-8"))
-              for p in sorted(PARSED_DIR.glob("*.json"))}
+    parsed = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(PARSED_DIR.glob("*.json"))}
     pages_on_disk = {p.stem for p in PAGES_DIR.glob("*.md")}
     links = sheet_links()
     all_vals = load_all_values()
@@ -190,8 +190,7 @@ def build_index() -> dict:
         page_aliases: list[str] = []
         for it in items:
             cell = it.get("label_cell")
-            terms = [it.get("label"), it.get("label_ko"), it.get("label_en"),
-                     *(it.get("aliases") or [])]
+            terms = [it.get("label"), it.get("label_ko"), it.get("label_en"), *(it.get("aliases") or [])]
             for t in terms:
                 if not t:
                     continue
@@ -226,9 +225,15 @@ def build_index() -> dict:
             "has_page": sheet in pages_on_disk,
             "key_terms": key_terms[:6],
             "aliases": page_aliases,
-            "items": [{"label": it.get("label"), "ko": it.get("label_ko"),
-                       "cell": it.get("label_cell"), "role": it.get("role")}
-                      for it in items],
+            "items": [
+                {
+                    "label": it.get("label"),
+                    "ko": it.get("label_ko"),
+                    "cell": it.get("label_cell"),
+                    "role": it.get("role"),
+                }
+                for it in items
+            ],
             "depends_on": [s for s in link.get("depends_on", []) if s in parsed],
             "feeds_into": [s for s in link.get("feeds_into", []) if s in parsed],
         }
@@ -242,13 +247,13 @@ def build_index() -> dict:
 def render_md(index: dict) -> str:
     pages, tree = index["pages"], index["tree"]
     n_alias = len(index["alias_index"])
-    out = ["# Project Stella — Wiki Index (ToC)", "",
-           f"> {len(pages)} pages · {n_alias} alias terms · vectorless lookup: resolve a "
-           "KO/EN term via the alias index → open the `[[page]]` → follow links.",
-           ">",
-           "> `data:` **full** = real numbers · **partial** = some `#REF!` · "
-           "**none (#REF!)** = engine sheet missing in `_raw` (skip) · **—** = no values.",
-           ""]
+    out = [
+        "# Project Stella — Wiki Index (ToC)",
+        "",
+        f"> {len(pages)} pages · {n_alias} alias terms · vectorless lookup: resolve a "
+        "KO/EN term via the alias index → open the `[[page]]` → follow links.",
+        "",
+    ]
 
     for section in sorted(tree):
         out += [f"## {section}", ""]
@@ -265,8 +270,6 @@ def render_md(index: dict) -> str:
                     meta.append(e["period"])
                 if e["unit"]:
                     meta.append(e["unit"])
-                meta.append(f"{e['n_items']} items")
-                meta.append(f"data: {e['data_status']}")
                 out.append(f"- **[[{s}]]** — {e['title']}")
                 if e.get("desc"):
                     out.append(f"  - {e['desc']}")
@@ -294,7 +297,6 @@ if __name__ == "__main__":
     n_alias = len(index["alias_index"])
     n_sections = len(index["tree"])
     n_dag = len(index["sheet_dag"])
-    print(f"index: {n_pages} pages, {n_sections} sections, {n_alias} alias terms, "
-          f"{n_dag}-sheet provenance DAG")
+    print(f"index: {n_pages} pages, {n_sections} sections, {n_alias} alias terms, " f"{n_dag}-sheet provenance DAG")
     print(f"  -> {OUT_JSON}")
     print(f"  -> {OUT_MD}")
