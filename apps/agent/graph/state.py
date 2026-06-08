@@ -29,5 +29,5 @@ class AgentState(TypedDict, total=False):
     answer: str            # the synthesizer's final Korean answer
     trace: Annotated[list, operator.add]     # per-turn record [{step, sub, agent, action, arg, thought}]
     steps: Annotated[int, operator.add]      # retriever reads consumed across branches (work done)
-    max_steps: int         # per-branch retry/read budget
+    max_steps: int         # per-branch read budget: initial read + up to (max_steps-1) retries
     verbose: bool

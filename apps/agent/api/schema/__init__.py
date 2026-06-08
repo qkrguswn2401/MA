@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class AskRequest(BaseModel):
     question: str = Field(..., description="KO/EN question about the Centroid valuation.")
-    max_steps: int = Field(8, ge=1, le=20, description="Agent step budget.")
+    max_steps: int = Field(3, ge=1, le=20, description="Per-branch read budget (initial read + retries).")
     include_trace: bool = Field(True, description="Return the routing trace.")
 
 

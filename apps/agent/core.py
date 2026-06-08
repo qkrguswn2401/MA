@@ -43,7 +43,7 @@ def _limit() -> dict:
     return {"recursion_limit": 25}
 
 
-def run(question: str, max_steps: int = 8, verbose: bool = False,
+def run(question: str, max_steps: int = 3, verbose: bool = False,
         index: dict | None = None) -> dict[str, Any]:
     """Navigate the wiki to answer ``question``; return ``{answer, trace, steps}``.
 
@@ -57,13 +57,13 @@ def run(question: str, max_steps: int = 8, verbose: bool = False,
             "steps": final.get("steps", 0)}
 
 
-def ask(question: str, max_steps: int = 8, verbose: bool = False,
+def ask(question: str, max_steps: int = 3, verbose: bool = False,
         index: dict | None = None) -> str:
     """Convenience wrapper around :func:`run` that returns just the answer string."""
     return run(question, max_steps=max_steps, verbose=verbose, index=index)["answer"]
 
 
-def stream_run(question: str, max_steps: int = 8, index: dict | None = None):
+def stream_run(question: str, max_steps: int = 3, index: dict | None = None):
     """Generator yielding routing events as the agent navigates, for live (SSE) display.
 
     Uses LangGraph's native ``app.stream(stream_mode="values")``: after every node the

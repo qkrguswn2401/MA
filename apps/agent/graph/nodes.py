@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -31,9 +32,18 @@ RETRIEVER = load_prompt("retriever")
 VERIFIER = load_prompt("verifier")
 SYNTHESIZER = load_prompt("synthesizer")
 
-_MAX_RETRY = 2  # router↻retriever retries allowed per sub-question
 _FANOUT = max(1, int(os.getenv("STELLA_FANOUT", "4")))  # concurrent LLM requests cap
 _LLM_SEM = threading.Semaphore(_FANOUT)  # guards the shared guest vLLM from overload
+_SYNTH_ORDER = 10**9  # sorts the synthesizer's trace entry last, after every branch
+
+
+def _cell_on_page(celltok: str, text: str) -> bool:
+    """Whether a bare cell ref (``E4``, ``AU4``) occurs on the page as a *whole* token.
+
+    A plain substring check lets ``E4`` match ``E40``/``AE4`` and wave a hallucinated cell
+    through — fatal for auditable provenance — so anchor the match on column/row boundaries.
+    """
+    return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(celltok)}(?![0-9])", text))
 
 
 def parse_action(raw: str) -> dict | None:
@@ -95,13 +105,13 @@ def planner_node(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------- per-sub-question sub-agents
-def _route(sub: dict, tried: list, index: dict) -> tuple[list, dict | None, str]:
+def _route(sub: dict, tried: list, index: dict, index_md: str) -> tuple[list, dict | None, str]:
     """Pick the wiki page(s) for one sub-question; on a trace sub-Q expand along the DAG."""
     hints = sub.get("hint_terms") or []
     lookups = "\n\n".join(lookup(index, t) for t in hints) if hints else "(no hint terms)"
     avoid = (f"\nAlready tried for this sub-question and found insufficient — pick a "
              f"DIFFERENT page unless re-reading is clearly justified: {tried}") if tried else ""
-    user = (f"INDEX:\n{sub['_index_md']}\n\nLookup results:\n{lookups}\n\n"
+    user = (f"INDEX:\n{index_md}\n\nLookup results:\n{lookups}\n\n"
             f"Sub-question: {sub['ask']}{avoid}\n\nReturn the pages JSON.")
     act, _ = _ask(ROUTER, user, 400)
     valid = set(index.get("pages", {}).keys())
@@ -134,12 +144,14 @@ def _retrieve(ask: str, pages: list) -> tuple[list, str]:
                 continue
             cell = str(e.get("cell", ""))
             celltok = cell.split("!")[-1]  # soft guard: the cell must be on THIS page
-            if celltok and celltok in texts[page]:
+            if celltok and _cell_on_page(celltok, texts[page]):
                 out.append({"page": e.get("page", "") or page, "cell": cell,
                             "term": e.get("term", ""), "value": str(e.get("value", "")),
                             "ask": ask})
         return out
 
+    # branch threads spawn this pool too — the _LLM_SEM (not the worker count) is the real
+    # cap, so total live threads can exceed _FANOUT but in-flight LLM requests never do.
     with ThreadPoolExecutor(max_workers=min(_FANOUT, len(pages))) as ex:
         per_page = list(ex.map(extract, pages))
     ev = [e for page_ev in per_page for e in page_ev]
@@ -164,26 +176,31 @@ def solve_node(state: AgentState, index: dict) -> AgentState:
 
     Runs as a parallel ``Send`` branch; returns only the ``operator.add`` channels, which
     LangGraph merges with the other branches at the barrier before the synthesizer."""
-    sub = dict(state["sub"])
-    sub["_index_md"] = state["index_md"]      # the router prompt needs the ToC
+    sub = state["sub"]
+    index_md = state["index_md"]              # the router prompt needs the ToC
     idx = state.get("sub_idx", 0)
-    max_steps = state.get("max_steps", 8)
+    max_steps = max(1, state.get("max_steps", 3))  # per-branch read budget (initial + retries)
     verbose = state.get("verbose")
 
     tried: list = []
     evidence: list = []
     paths: list = []
     trace: list = []
-    reads = retries = seq = 0
+    seen: set = set()                         # (page, cell) already captured — dedup retries
+    reads = seq = 0
     while True:
-        picks, path, rthought = _route(sub, tried, index)
+        picks, path, rthought = _route(sub, tried, index, index_md)
         trace.append(_rec(idx, seq, "router", "route", ", ".join(picks) or "(none)", rthought))
         seq += 1
         if path:
             paths.append(path)
 
         ev, summary = _retrieve(sub["ask"], picks)
-        evidence += ev
+        for e in ev:                          # keep first sighting of each cell on this branch
+            key = (e["page"], e["cell"])
+            if key not in seen:
+                seen.add(key)
+                evidence.append(e)
         tried += picks
         reads += 1
         trace.append(_rec(idx, seq, "retriever", "read", summary, ""))
@@ -193,9 +210,8 @@ def solve_node(state: AgentState, index: dict) -> AgentState:
         trace.append(_rec(idx, seq, "verifier", "verify", verdict, reason))
         seq += 1
 
-        if verdict != "gap" or retries >= _MAX_RETRY or reads >= max_steps:
+        if verdict != "gap" or reads >= max_steps:  # answered, or branch budget spent
             break
-        retries += 1
 
     if verbose:
         tag = f"[trace {sub.get('direction')}]" if sub.get("mode") == "trace" else ""
@@ -226,5 +242,5 @@ def synthesizer_node(state: AgentState) -> AgentState:
     text = ((act or {}).get("text") or raw or "").strip() or "(빈 답변)"
     return {
         "answer": text,
-        "trace": [_rec(10**9, 0, "synthesizer", "answer", "", (act or {}).get("thought", ""))],
+        "trace": [_rec(_SYNTH_ORDER, 0, "synthesizer", "answer", "", (act or {}).get("thought", ""))],
     }

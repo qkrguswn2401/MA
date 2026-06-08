@@ -97,7 +97,7 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
 @app.get("/ask/stream")
 def ask_stream(
     question: str = Query(..., description="KO/EN question about the valuation."),
-    max_steps: int = Query(8, ge=1, le=20),
+    max_steps: int = Query(3, ge=1, le=20),
 ) -> StreamingResponse:
     """Stream the agent's routing live as Server-Sent Events.
 
