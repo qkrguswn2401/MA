@@ -4,3 +4,4 @@ networkx>=3.0
 langgraph>=1.0      # agent/wiki_agent.py: StateGraph orchestration for the query agent
 fastapi>=0.115      # agent/server.py: HTTP API over the agent
 uvicorn[standard]>=0.30  # ASGI server for agent/server.py
+pytest>=8.0         # tests/ — deterministic suite by default; live-LLM tests opt-in (--run-llm)

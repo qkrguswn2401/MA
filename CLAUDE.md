@@ -107,10 +107,20 @@ scripts/run_server.sh                     # backend on :8000 (also serves the HT
 cd frontend && npm install && npm run dev # React app on :5173, proxies the API  (npm run build for prod)
 ```
 
-There is no test suite yet. Both entry points have a `__main__` smoke-print; run them
-from the repo root (`MA/`) so `src.` resolves. The reference repos use `uv` — translate
-their `uv run`/`uv add` to `python`/`pip install`. Keep extraction (Excel → graph)
-separate from query (agent → graph); the query/agent layer is not built yet.
+Tests live in `tests/` (`pytest` from the repo root). The default run is **deterministic +
+offline** — `trace_links`/`lookup`/`parse_action`/reducer wiring/carry anchors, etc.; live-LLM
+end-to-end smoke tests are marked `@pytest.mark.llm` and **skipped unless `--run-llm`** (they
+hit the guest vLLM — slow, non-deterministic). Fixtures skip cleanly when build artifacts
+(`index.json`, the full workbook) are absent, so a fresh checkout still runs green.
+
+```bash
+pytest                 # deterministic suite (~2s, no network)
+pytest --run-llm       # also run the live-vLLM end-to-end smoke tests
+```
+
+Both `__main__` entry points also have a smoke-print; run them from the repo root (`MA/`) so
+`src.` resolves. The reference repos use `uv` — translate their `uv run`/`uv add` to
+`python`/`pip install`.
 
 ## Data source: the workbook
 
