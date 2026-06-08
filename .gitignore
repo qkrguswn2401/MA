@@ -19,3 +19,4 @@ frontend/dist/
 
 # Local agent/session state
 .claude/
+docs/agent_graph.png
