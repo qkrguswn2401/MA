@@ -187,10 +187,10 @@ def export(g: nx.DiGraph, path: str) -> None:
 
 
 if __name__ == "__main__":
-    from .. import WORKBOOK, DATA_DIR
+    from .. import FULL_WORKBOOK, DATA_DIR  # graph layer needs the full 63-sheet model
 
-    dg = build_dependency_graph(WORKBOOK)
-    sg = build_semantic_graph(WORKBOOK, dg)
+    dg = build_dependency_graph(FULL_WORKBOOK)
+    sg = build_semantic_graph(FULL_WORKBOOK, dg)
     print(f"semantic graph: {sg.number_of_nodes()} nodes, {sg.number_of_edges()} edges")
     for t in ("Section", "Entity", "Fund", "Metric", "Period"):
         members = [n for n, d in sg.nodes(data=True) if d.get("type") == t]

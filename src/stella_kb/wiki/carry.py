@@ -26,12 +26,8 @@ from pathlib import Path
 
 import openpyxl
 
-from .. import DATA_DIR
+from .. import FULL_WORKBOOK  # the full workbook (engine sheets dropped from `_raw`)
 
-# The full workbook (the engine sheets dropped from `_raw`); read this sheet only.
-FULL_WORKBOOK = str(
-    DATA_DIR / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated).xlsx"
-)
 SHEET = "성과보수, 배당금"
 PARSED_OUT = Path("data/parsed") / f"{SHEET}.json"
 PAGE_OUT = Path("data/wiki/pages") / f"{SHEET}.md"

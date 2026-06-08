@@ -355,11 +355,11 @@ def _year_of(raw: object) -> int | str:
 
 
 if __name__ == "__main__":
-    from .. import WORKBOOK
+    from .. import FULL_WORKBOOK  # metric anchors live in the engine sheets, full model only
 
     g = nx.DiGraph()
     # standalone smoke test: build just the metric layer (no cell DAG needed)
-    attach_metrics(g, WORKBOOK)
+    attach_metrics(g, FULL_WORKBOOK)
     metrics = [n for n, d in g.nodes(data=True) if d.get("type") == "Metric"]
     periods = sorted((d["year"] for n, d in g.nodes(data=True) if d.get("type") == "Period"),
                      key=lambda y: (1, 0) if isinstance(y, str) else (0, y))

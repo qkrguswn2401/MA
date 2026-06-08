@@ -113,9 +113,9 @@ def build_dependency_graph(path: str) -> DependencyGraph:
 
 
 if __name__ == "__main__":
-    from .. import WORKBOOK
+    from .. import FULL_WORKBOOK  # graph layer needs the engine sheets absent from `_raw`
 
-    dg = build_dependency_graph(WORKBOOK)
+    dg = build_dependency_graph(FULL_WORKBOOK)
     print(f"formula cells: {len(dg.cells)}")
     print(f"dependency edges: {len(dg.edges)}")
     for cell_id, info in list(dg.cells.items())[:10]:
