@@ -7,9 +7,14 @@ each node type / edge type can be toggled, so the 694-node graph stays explorabl
 Output goes to ``frontend/web/graph.html`` so the running FastAPI server serves it at
 ``/ui/graph.html`` (it also works opened directly via file://, since the data is inlined).
 
-Usage (repo root, venv active; run lift first to produce the JSON):
-    python -m src.stella_kb.graph.lift
-    python -m src.stella_kb.graph.viz
+Two graphs can be rendered (same node-link template, different sources):
+  - ``wiki``    — :mod:`lift`'s wiki-grounded graph (``stella_semantic.json``) -> graph.html
+  - ``curated`` — :mod:`semantic`'s DCF-anchor graph (``stella_graph.json``)   -> graph_curated.html
+
+Usage (repo root, venv active; build the source JSON first):
+    python -m src.stella_kb.graph.lift && python -m src.stella_kb.graph.viz          # wiki (default)
+    python -m src.stella_kb.graph.semantic && python -m src.stella_kb.graph.viz curated
+    python -m src.stella_kb.graph.viz both
 """
 
 from __future__ import annotations
@@ -19,8 +24,13 @@ from pathlib import Path
 
 from .. import DATA_DIR, ROOT
 
-IN_JSON = DATA_DIR / "stella_semantic.json"
-OUT_HTML = ROOT / "frontend" / "web" / "graph.html"
+# named views: key -> (source json, output html, page title)
+VIEWS = {
+    "wiki": (DATA_DIR / "stella_semantic.json", ROOT / "frontend" / "web" / "graph.html",
+             "Semantic Graph (wiki-grounded · lift)"),
+    "curated": (DATA_DIR / "stella_graph.json", ROOT / "frontend" / "web" / "graph_curated.html",
+                "DCF Anchor Graph (curated · semantic)"),
+}
 
 # node type -> color; the structural types are muted, the metric grains pop
 COLORS = {
@@ -34,8 +44,10 @@ EDGE_OFF = {"INSTANCE_OF", "COVERS"}
 
 def to_vis(graph: dict) -> tuple[list, list]:
     """node-link JSON -> (vis nodes, vis edges)."""
+    # semantic.py exports node-link JSON under "edges"; lift.py under "links" — accept both
+    edge_list = graph.get("links") or graph.get("edges") or []
     deg: dict[str, int] = {}
-    for e in graph["links"]:
+    for e in edge_list:
         deg[e["source"]] = deg.get(e["source"], 0) + 1
         deg[e["target"]] = deg.get(e["target"], 0) + 1
 
@@ -57,7 +69,7 @@ def to_vis(graph: dict) -> tuple[list, list]:
         })
 
     edges = []
-    for e in graph["links"]:
+    for e in edge_list:
         et = e.get("type", "?")
         edges.append({
             "from": e["source"], "to": e["target"], "etype": et,
@@ -69,7 +81,7 @@ def to_vis(graph: dict) -> tuple[list, list]:
     return nodes, edges
 
 
-def render(graph: dict) -> str:
+def render(graph: dict, title: str = "Semantic Graph") -> str:
     nodes, edges = to_vis(graph)
     ntypes = sorted({n["group"] for n in nodes})
     etypes = sorted({e["etype"] for e in edges})
@@ -84,6 +96,7 @@ def render(graph: dict) -> str:
         f'{"" if t in EDGE_OFF else "checked"}> {t}</label>' for t in etypes)
 
     return _TEMPLATE.format(
+        title=title,
         nodes=json.dumps(nodes, ensure_ascii=False),
         edges=json.dumps(edges, ensure_ascii=False),
         legend=legend, ncb=ncb, ecb=ecb,
@@ -92,7 +105,7 @@ def render(graph: dict) -> str:
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"/>
-<title>Project Stella — Semantic Graph</title>
+<title>Project Stella — {title}</title>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
   html,body{{margin:0;height:100%;background:#0f1115;color:#e6e9ef;
@@ -112,7 +125,7 @@ _TEMPLATE = """<!DOCTYPE html>
 </style></head>
 <body>
 <div id="panel">
-  <h1>Stella — Semantic Graph</h1>
+  <h1>{title}</h1>
   <div class="sub">{n} nodes · {e} edges · 색상 = 노드 유형</div>
   <div>{legend}</div>
   <div class="grp">Node types</div><div>{ncb}</div>
@@ -156,9 +169,25 @@ document.getElementById('search').onkeydown=ev=>{{
 """
 
 
+def render_view(key: str) -> None:
+    in_json, out_html, title = VIEWS[key]
+    if not in_json.exists():
+        builder = "lift" if key == "wiki" else "semantic"
+        raise SystemExit(f"!! {in_json} missing — run `python -m src.stella_kb.graph.{builder}` first")
+    graph = json.loads(in_json.read_text(encoding="utf-8"))
+    n_edges = len(graph.get("links") or graph.get("edges") or [])
+    out_html.parent.mkdir(parents=True, exist_ok=True)
+    out_html.write_text(render(graph, title), encoding="utf-8")
+    print(f"wrote {out_html}  ({len(graph['nodes'])} nodes, {n_edges} edges)  ->  /ui/{out_html.name}")
+
+
 if __name__ == "__main__":
-    graph = json.loads(IN_JSON.read_text(encoding="utf-8"))
-    OUT_HTML.parent.mkdir(parents=True, exist_ok=True)
-    OUT_HTML.write_text(render(graph), encoding="utf-8")
-    print(f"wrote {OUT_HTML}  ({len(graph['nodes'])} nodes, {len(graph['links'])} edges)")
-    print("serve: it's under frontend/web/ -> open http://localhost:8000/ui/graph.html")
+    import sys
+
+    arg = sys.argv[1] if len(sys.argv) > 1 else "wiki"
+    keys = list(VIEWS) if arg == "both" else [arg]
+    if any(k not in VIEWS for k in keys):
+        raise SystemExit(f"usage: viz [wiki|curated|both]  (got {arg!r})")
+    for k in keys:
+        render_view(k)
+    print("serve: files are under frontend/web/ -> open http://localhost:8000/ui/<name>")
