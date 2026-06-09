@@ -150,6 +150,24 @@ FUND_NODE_MAP: dict[str, str] = {
 }
 
 
+# Per-fund GP **carry** anchors. The `성과보수, 배당금` sheet lays six fund blocks side by
+# side, each with a *different* value-column offset, so it defeats the generic series reader —
+# hence a curated cell table (the same anchor philosophy as METRICS / FUND_FEE_ROWS). In every
+# block the headline rows are 성과보수 (carry) MGT=row4 / DTT=row6 and 재산분배액
+# (distribution) MGT=row7 / DTT=row9; the Exit assumptions sit on row 5. The active file case
+# is DTT, so `value` is the DTT figure and `value_mgt` carries the management-case figure.
+# `node` is the Biz Plan `Fund:` node id (제7호/제7-1호 share the combined `7호&7-1호` fund).
+CARRY_FUNDS: list[dict] = [
+    {"alias": "제2호", "node": "제2호", "val": "E", "ebitda": "J5", "mult": "L5", "hurdle": "N5"},
+    {"alias": "옐로씨", "node": "옐로씨", "val": "S", "ebitda": "V5", "mult": "W5", "hurdle": "Y5"},
+    {"alias": "제5호", "node": "제5호", "val": "AF", "ebitda": "AJ5", "mult": "AK5", "hurdle": "AM5"},
+    {"alias": "제7호", "node": "7호&7-1호", "val": "AU", "ebitda": "AY5", "mult": "AZ5", "hurdle": "BB5"},
+    {"alias": "제7-1호", "node": "7호&7-1호", "val": "BI", "ebitda": "BM5", "mult": "BN5", "hurdle": "BP5"},
+    {"alias": "제8호", "node": "제8호", "val": "BW", "ebitda": "CB5", "mult": "CC5", "hurdle": "CE5"},
+]
+CARRY_SHEET = "성과보수, 배당금"
+
+
 def _slug(name: str) -> str:
     return name.strip().replace(" ", "").replace("-", "")
 
@@ -335,6 +353,7 @@ def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
             for mid in (rate_id, cap_id, fee_id):
                 g.add_edge(mid, f"Fund:{fund_node}", type="BELONGS_TO")
 
+    _attach_carry(g, wb)
     wb.close()
 
     # cross-metric edges, whitelist-guarded
@@ -345,6 +364,62 @@ def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
         if src in METRIC_IDS and dst in METRIC_IDS:
             g.add_edge(f"Metric:{src}", f"Metric:{dst}", type="ASSUMPTION_OF")
     return g
+
+
+def _attach_carry(g: nx.DiGraph, wb) -> None:
+    """Per-fund GP carry & distribution from the `성과보수, 배당금` engine sheet.
+
+    Mirrors the per-fund management-fee block: each fund gets a `fund_carry` metric (DTT on
+    the node, MGT on ``value_mgt``) that DRIVES the aggregate ``performance_fee``, plus a
+    `fund_distribution` metric and the three Exit assumptions (EBITDA, multiple, hurdle) that
+    are ASSUMPTION_OF its carry. Every value is pinned to an exact cell via DEFINED_IN, and
+    each metric BELONGS_TO its Biz Plan ``Fund:`` node.
+    """
+    ws = wb[CARRY_SHEET]
+
+    def cell(ref: str) -> str:
+        cid = f"{CARRY_SHEET}!{ref}"
+        g.add_node(cid, type="Cell", sheet=CARRY_SHEET)
+        return cid
+
+    for f in CARRY_FUNDS:
+        slug, v = _slug(f["alias"]), f["val"]
+        fund_node = f"Fund:{f['node']}"
+
+        carry_id = f"Metric:fund_carry:{slug}"
+        g.add_node(carry_id, type="Metric", label=f"{f['alias']} — GP carry", label_ko="성과보수",
+                   category="revenue", sheet=CARRY_SHEET, case="DTT",
+                   value=ws[f"{v}6"].value, value_mgt=ws[f"{v}4"].value,
+                   aliases=["성과보수", "carry", "carried interest", "performance fee", f["alias"]])
+        g.add_edge(carry_id, cell(f"{v}6"), type="DEFINED_IN")     # DTT (active)
+        g.add_edge(carry_id, cell(f"{v}4"), type="DEFINED_IN")     # MGT
+        g.add_edge(carry_id, "Metric:performance_fee", type="DRIVES")
+
+        dist_id = f"Metric:fund_distribution:{slug}"
+        g.add_node(dist_id, type="Metric", label=f"{f['alias']} — distribution to GP",
+                   label_ko="재산분배액", category="revenue", sheet=CARRY_SHEET, case="DTT",
+                   value=ws[f"{v}9"].value, value_mgt=ws[f"{v}7"].value,
+                   aliases=["재산분배액", "distribution", f["alias"]])
+        g.add_edge(dist_id, cell(f"{v}9"), type="DEFINED_IN")
+        g.add_edge(dist_id, cell(f"{v}7"), type="DEFINED_IN")
+
+        # Exit assumptions (MGT-case row 5) that drive the carry computation.
+        for suffix, ref, label_en, label_ko in (
+            ("exit_ebitda", f["ebitda"], "Exit EBITDA/base", "Exit EBITDA"),
+            ("exit_multiple", f["mult"], "Exit multiple", "Exit Multiple"),
+            ("hurdle", f["hurdle"], "Hurdle rate", "기준수익률"),
+        ):
+            aid = f"Metric:fund_{suffix}:{slug}"
+            g.add_node(aid, type="Metric", label=f"{f['alias']} — {label_en}", label_ko=label_ko,
+                       category="assumption", sheet=CARRY_SHEET, value=ws[ref].value)
+            g.add_edge(aid, cell(ref), type="DEFINED_IN")
+            g.add_edge(aid, carry_id, type="ASSUMPTION_OF")
+            if fund_node in g:
+                g.add_edge(aid, fund_node, type="BELONGS_TO")
+
+        if fund_node in g:
+            g.add_edge(carry_id, fund_node, type="BELONGS_TO")
+            g.add_edge(dist_id, fund_node, type="BELONGS_TO")
 
 
 def _year_of(raw: object) -> int | str:
@@ -380,3 +455,11 @@ if __name__ == "__main__":
     for u, v, d in g.out_edges("Metric:management_fee", data=True):
         if d["type"] == "HAS_VALUE":
             print(f"  {v.split(':',1)[1]}: {d['value']:.1f}  [{d['cell']}]")
+
+    print("\nper-fund carry (DTT on node, MGT alt) -> performance_fee:")
+    for n, d in g.nodes(data=True):
+        if n.startswith("Metric:fund_carry:"):
+            print(f"  {d['label']:24s} DTT={d.get('value')!r:>10}  MGT={d.get('value_mgt')!r}")
+    pf_in = [u.split(":", 2)[-1] for u, v, d in g.in_edges("Metric:performance_fee", data=True)
+             if d["type"] == "DRIVES" and u.startswith("Metric:fund_carry:")]
+    print(f"  funds DRIVES performance_fee: {pf_in}")

@@ -350,7 +350,7 @@ if __name__ == "__main__":
             return f"!! no parsed JSON for {name!r} — run parse_llm first"
         parsed = json.loads(parsed_files[name].read_text(encoding="utf-8"))
         sheet = parsed.get("sheet", name)
-        if sheet not in whitelist:  # _raw-only: skip full-workbook sheets (e.g. carry.py's)
+        if sheet not in whitelist:  # _raw-only: skip any full-workbook-only sheet (e.g. carry)
             return f"-- skipping {name!r} — sheet {sheet!r} not in _raw (out of wiki scope)"
         md = compile_page(sheet, parsed, load_values(sheet), links, whitelist, use_llm)
         (OUT_DIR / f"{name}.md").write_text(md, encoding="utf-8")

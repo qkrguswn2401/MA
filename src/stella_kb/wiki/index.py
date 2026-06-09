@@ -169,8 +169,8 @@ def build_index() -> dict:
     all_vals = load_all_values()
     raw_sheets = set(all_vals)  # the canonical `_raw` sheet set — the index covers only these
 
-    # Ingest only parsed JSONs whose sheet exists in `_raw`. Full-workbook-only artifacts
-    # (e.g. carry.py's `성과보수, 배당금.json`) are skipped, so nothing outside `_raw` leaks in.
+    # Ingest only parsed JSONs whose sheet exists in `_raw`. Any full-workbook-only artifact
+    # (e.g. a stale `성과보수, 배당금.json`) is skipped, so nothing outside `_raw` leaks in.
     parsed: dict[str, dict] = {}
     for p in sorted(PARSED_DIR.glob("*.json")):
         d = json.loads(p.read_text(encoding="utf-8"))

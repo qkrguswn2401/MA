@@ -74,7 +74,6 @@ src/stella_kb/
     dump_sheet.py         # dump any sheet's cells (value + formula) for analysis
     parse_llm.py          # LLM parse pass: grid -> grounded structural schema (data/parsed/)
     compile.py            # compile wiki pages from parsed schema (data/wiki/pages/)  (was wiki.py)
-    carry.py              # curated per-fund 성과보수/재산분배액 page (sheet lives only in full wb)
     index.py              # build INDEX.md + index.json routing table
 apps/agent/               # query agent (separate from the build pipeline above)
   core.py                 # public API: run / ask / stream_run
@@ -96,8 +95,8 @@ requirements.txt          # openpyxl, pandas, networkx, langgraph, fastapi, uvic
 source .venv/bin/activate                 # or call .venv/bin/python directly
 pip install -r requirements.txt           # one-time
 python -m src.stella_kb.graph.extract     # parse formulas -> ~13.7k cells, ~74k edges
-python -m src.stella_kb.graph.metrics     # cell->Metric layer alone -> 72 metrics, 14 periods
-python -m src.stella_kb.graph.semantic    # full semantic graph (388 nodes, 704 edges) -> data/stella_graph.json
+python -m src.stella_kb.graph.metrics     # cell->Metric layer alone -> 102 metrics, 14 periods
+python -m src.stella_kb.graph.semantic    # full semantic graph -> data/stella_graph.json
 python -m src.stella_kb.graph.query       # ask questions: resolve -> traverse -> cited answer
 ```
 
@@ -192,18 +191,23 @@ encodes — keep them in mind for any new extraction:
   → equity_value`, with `wacc`/`pgr`/`hurdle_rate`/`carry_rate` as `ASSUMPTION_OF` edges.
   Per-fund fee anchors (`관리수수료` rows 8-19) add `fund_fee_rate`/`fund_committed_capital`/
   `fund_mgmt_fee` per fund (12 funds), each `BELONGS_TO` its `Fund:` node and `DRIVES` the
-  aggregate `management_fee`. **Export to disk** is wired: `python -m src.stella_kb.graph.semantic`
-  writes `data/stella_graph.json` (node-link JSON; `export()` also does GraphML). Full
-  graph ≈ **388 nodes / 704 edges**.
+  aggregate `management_fee`. **Per-fund carry anchors** (`성과보수, 배당금`, `CARRY_FUNDS` in
+  `metrics.py`) add `fund_carry`/`fund_distribution` + the Exit assumptions
+  (`fund_exit_ebitda`/`fund_exit_multiple`/`fund_hurdle`) per fund (6 funds with a carry
+  block: 제2호·옐로씨·제5호·제7호·제7-1호·제8호); carry carries the active **DTT** on the node
+  and **MGT** on `value_mgt`, `DRIVES` the aggregate `performance_fee`, and `BELONGS_TO` its
+  `Fund:` node (제7호/제7-1호 → the combined `7호&7-1호`). Only 제7호 (DTT 135,635 / MGT
+  391,912) and 제8호 (20,048) clear the hurdle; the rest are 0. **Export to disk** is wired:
+  `python -m src.stella_kb.graph.semantic` writes `data/stella_graph.json` (node-link JSON;
+  `export()` also does GraphML). Metric layer ≈ **102 metrics**.
 - **Query layer (v1) built**: `query.py` does resolve → traverse → synthesize. `resolve()`
   maps a question to a Metric id via `llm.resolve_metric` (whitelist-guarded); deterministic
   helpers (`series`/`drivers`/`source_cells`/`evidence`) gather graph evidence with source
   cells; the LLM only writes the final prose from that evidence and must cite cells. Answers
   KO and EN. Loads `data/stella_graph.json`.
-- **Not yet built**: per-fund **carry** anchors (the `성과보수, 배당금` per-fund Exit-value
-  blocks have irregular per-block column offsets — only the aggregate `performance_fee`
-  series is anchored so far), the `_MGT`/`_DTT` case as parallel metric values (currently
-  only the active DTT case is read), and a **multi-hop agent loop** (v1 query resolves a
+- **Not yet built**: the `_MGT`/`_DTT` case as parallel metric values across the *whole*
+  model (per-fund carry already carries both via `value`/`value_mgt`, but the DCF/revenue
+  series still read only the active DTT case), and a **multi-hop agent loop** (v1 query resolves a
   single focal metric; cross-metric or comparative questions need iterative traversal).
   `classify_sheets` (and
   the `metrics.py` anchors) are hand-curated and brittle to renames — an LLM labelling pass
