@@ -74,3 +74,22 @@ def test_carry_anchors_against_workbook(full_workbook):
                if d["type"] == "DRIVES" and u.startswith("Metric:fund_carry:")}
     assert len(drivers) == len(CARRY_FUNDS)
     assert any(d["sheet"] == CARRY_SHEET for _, d in g.nodes(data=True) if d.get("type") == "Cell")
+
+
+# --- dual-case: DCF-summary metrics carry both the active (DTT) and frozen MGT value ---
+
+
+def test_dual_case_scalars_carry_both_values(full_workbook):
+    """equity_value etc. hold value=DTT (live DCF) + value_mgt=MGT (frozen exhibit)."""
+    g = nx.DiGraph()
+    attach_metrics(g, str(full_workbook))
+
+    ev = g.nodes["Metric:equity_value"]
+    assert round(ev["value"]) == 120696          # DTT (active), DCF!K59
+    assert round(ev["value_mgt"]) == 206131      # MGT, frozen in the exhibit
+    assert ev["value"] != ev["value_mgt"]        # the two teams' cases genuinely differ
+    assert ev["cell_mgt"] == "DCF 장표 #1_MGT!E12"
+
+    # WACC is the same across cases (the gap is in the cashflows/period, not the discount rate)
+    wacc = g.nodes["Metric:wacc"]
+    assert round(wacc["value"], 4) == round(wacc["value_mgt"], 4)

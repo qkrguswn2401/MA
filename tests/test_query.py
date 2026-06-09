@@ -64,3 +64,16 @@ def test_ask_unresolved_is_graceful(monkeypatch):
     monkeypatch.setattr(llm, "resolve_metrics", lambda q, m=4: [])
     monkeypatch.setattr(query, "resolve", lambda q: None)
     assert "Could not resolve" in query.ask("???", g=_toy_graph())
+
+
+# --- evidence: dual-case metrics surface BOTH the DTT and MGT values --------------------
+
+
+def test_evidence_shows_both_cases_when_dual():
+    g = nx.DiGraph()
+    g.add_node("Metric:equity_value", type="Metric", label="Equity Value", category="valuation",
+               case="DTT", value=120696.1, value_mgt=206130.8, cell_mgt="DCF 장표 #1_MGT!E12")
+    ev = query.evidence(g, "Metric:equity_value")
+    assert "Value (DTT case): 120696.1" in ev
+    assert "Value (MGT case): 206130.8" in ev
+    assert "DCF 장표 #1_MGT!E12" in ev

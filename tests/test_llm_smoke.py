@@ -41,3 +41,15 @@ def test_graph_query_comparison_fans_out_to_two_metrics():
     assert {"Metric:management_fee", "Metric:performance_fee"} <= set(mids)
     ev = query.ask("관리보수와 성과보수를 비교하면?", synthesize=False, g=g)
     assert "Management Fee" in ev and "Performance Fee" in ev  # both metrics' evidence gathered
+
+
+def test_graph_query_dual_case_equity_value():
+    """A single dual-case metric answers an MGT-vs-DTT comparison, citing both cases."""
+    from src.stella_kb.graph import query
+
+    if not os.path.exists(query.GRAPH_PATH):
+        pytest.skip("graph not built — run `python -m src.stella_kb.graph.semantic`")
+    g = query.load_graph()
+    ans = query.ask("MGT와 DTT 케이스의 equity value를 비교하면?", g=g)  # synthesize via prompt file
+    assert "206,130" in ans or "206130" in ans   # MGT equity (frozen exhibit)
+    assert "120,696" in ans or "120696" in ans   # DTT equity (live DCF)

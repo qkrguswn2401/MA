@@ -133,6 +133,21 @@ METRICS: list[Metric] = [
 METRIC_IDS = {m.id for m in METRICS}
 
 
+# Dual-case: the live `DCF` sheet (and thus each metric's primary cell) holds whichever case
+# is active — currently **DTT**. The **MGT** counterpart is frozen in the MGT exhibit, which
+# shares the DTT exhibit's exact layout, so each DCF-summary metric's MGT value sits at a known
+# cell there. We keep the metric's DEFINED_IN anchor on the live DCF cell (it wires into the
+# formula DAG; the exhibit is a downstream PPT view, never the source of truth) and attach the
+# MGT figure as `value_mgt` + `cell_mgt`. So `value`=DTT (active), `value_mgt`=MGT.
+MGT_EXHIBIT = "DCF 장표 #1_MGT"
+DUAL_CASE_MGT: dict[str, str] = {
+    "equity_value": "E12", "enterprise_value": "E10", "operating_value": "E8",
+    "pv_projection_fcf": "E6", "pv_terminal_value": "E7", "noa": "E9",
+    "net_cash_debt": "E11", "wacc": "J5", "perpetual_growth_rate": "J6",
+    "valuation_date": "J7",
+}
+
+
 # Per-fund fee anchors live in `관리수수료` rows 8-19 (name=C, committed=O, rate=P, annual=Q).
 # Map each fee-sheet fund label to the Biz Plan `Fund:` node id, where one exists (the fee
 # sheet uses "제1호 차이나" where Biz Plan uses "차이나1호"; some funds have no Biz Plan sheet).
@@ -270,6 +285,10 @@ def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
             g.nodes[mid]["value"] = val
             g.add_node(cid, type="Cell", sheet=m.sheet)
             g.add_edge(mid, cid, type="DEFINED_IN")
+            if m.id in DUAL_CASE_MGT:                  # add the frozen MGT-case counterpart
+                ec = DUAL_CASE_MGT[m.id]
+                g.nodes[mid]["value_mgt"] = wb[MGT_EXHIBIT][ec].value
+                g.nodes[mid]["cell_mgt"] = f"{MGT_EXHIBIT}!{ec}"
             if m.period is not None:
                 pid = add_period(m.period)
                 g.add_edge(mid, pid, type="HAS_VALUE", value=val, cell=cid)

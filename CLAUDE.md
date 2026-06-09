@@ -197,9 +197,15 @@ encodes — keep them in mind for any new extraction:
   block: 제2호·옐로씨·제5호·제7호·제7-1호·제8호); carry carries the active **DTT** on the node
   and **MGT** on `value_mgt`, `DRIVES` the aggregate `performance_fee`, and `BELONGS_TO` its
   `Fund:` node (제7호/제7-1호 → the combined `7호&7-1호`). Only 제7호 (DTT 135,635 / MGT
-  391,912) and 제8호 (20,048) clear the hurdle; the rest are 0. **Export to disk** is wired:
-  `python -m src.stella_kb.graph.semantic` writes `data/stella_graph.json` (node-link JSON;
-  `export()` also does GraphML). Metric layer ≈ **102 metrics**.
+  391,912) and 제8호 (20,048) clear the hurdle; the rest are 0. **Dual-case** is wired for the
+  DCF-summary scalars (`DUAL_CASE_MGT` in `metrics.py`): equity/enterprise/operating value,
+  PV of projection & terminal, NOA, net cash(debt), WACC, PGR, valuation date each carry
+  `value`=active **DTT** (live `DCF` cell, kept on the formula DAG) **and** `value_mgt`=**MGT**
+  read from the frozen `DCF 장표 #1_MGT` exhibit (identical layout to the DTT exhibit), with
+  `cell_mgt` for provenance. So "compare MGT vs DTT equity value" answers from one metric
+  (206,131 vs 120,696). **Export to disk** is wired: `python -m src.stella_kb.graph.semantic`
+  writes `data/stella_graph.json` (node-link JSON; `export()` also does GraphML). Metric layer
+  ≈ **102 metrics**.
 - **Query layer (v2, multi-hop) built**: `query.py` does resolve → traverse → synthesize.
   `resolve_all()` maps a question to the **set** of focal Metric ids via `llm.resolve_metrics`
   (whitelist-guarded, order-preserving, capped; falls back to single `resolve()`), so a
@@ -208,10 +214,11 @@ encodes — keep them in mind for any new extraction:
   DRIVES/ASSUMPTION_OF chain to depth 6); `series`/`source_cells`/`evidence` carry source
   cells; the LLM only writes one joint prose answer over all blocks and must cite cells.
   Answers KO and EN. Loads `data/stella_graph.json`.
-- **Not yet built**: the `_MGT`/`_DTT` case as parallel metric values across the *whole*
-  model (per-fund carry already carries both via `value`/`value_mgt`, but the DCF/revenue
-  series still read only the active DTT case — so "compare MGT vs DTT equity value" can't yet
-  be answered from the graph even though the fan-out resolves it). `classify_sheets` (and
+- **Not yet built**: dual-case for the **per-year series** (the DCF cashflow rows EBIT/EBITDA/
+  FCFF and the revenue series still read only the active DTT case — only the DCF-summary
+  *scalars* and per-fund carry carry both cases so far; the two exhibits' projection windows
+  differ — MGT 5.5yrs from 2024 2H, DTT 5yrs from 2025 — so a per-year dual axis needs care).
+  `classify_sheets` (and
   the `metrics.py` anchors) are hand-curated and brittle to renames — an LLM labelling pass
   (the OpenKB approach, seeded by the sheet-name taxonomy in `docs/workbook_analysis.md`)
   can extend coverage without touching graph construction. `metrics.py` values come from

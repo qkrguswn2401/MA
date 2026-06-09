@@ -17,6 +17,7 @@ import networkx as nx
 
 from .. import DATA_DIR
 from .. import llm
+from ..prompts import load as load_prompt
 
 GRAPH_PATH = str(DATA_DIR / "stella_graph.json")
 
@@ -76,7 +77,13 @@ def evidence(g: nx.DiGraph, mid: str) -> str:
     if n.get("label_ko"):
         lines.append(f"Korean label: {n['label_ko']}")
     if n.get("value") is not None:
-        lines.append(f"Value: {n['value']}  [cells: {', '.join(source_cells(g, mid)) or '—'}]")
+        cells = ", ".join(source_cells(g, mid)) or "—"
+        if n.get("value_mgt") is not None:          # dual-case: show both MGT and DTT
+            case = n.get("case") or "DTT"
+            lines.append(f"Value ({case} case): {n['value']}  [cells: {cells}]")
+            lines.append(f"Value (MGT case): {n['value_mgt']}  [cell: {n.get('cell_mgt', '—')}]")
+        else:
+            lines.append(f"Value: {n['value']}  [cells: {cells}]")
     s = series(g, mid)
     if s:
         lines.append("By period:")
@@ -131,14 +138,7 @@ def ask(question: str, synthesize: bool = True, g: nx.DiGraph | None = None,
     ev = "\n\n".join(blocks)
     if not synthesize:
         return ev
-    sys = (
-        "You answer M&A valuation questions about Centroid using ONLY the evidence blocks. "
-        "The evidence may cover one metric or several — when the question compares metrics, "
-        "compare them explicitly (cite each side). Do not invent numbers. Cite the source "
-        "cell (e.g. DCF!K59) for every figure you state. When a metric notes its case "
-        "(MGT/DTT), say which case the number is from. Units are KRW millions unless the "
-        "value is a rate/date. Be concise."
-    )
+    sys = load_prompt("query_synthesis_system")
     plural = "s" if len(mids) > 1 else ""
     user = f"Question: {question}\n\nEvidence ({len(mids)} metric{plural}):\n{ev}\n\nAnswer:"
     return llm.chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
