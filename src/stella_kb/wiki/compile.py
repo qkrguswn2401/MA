@@ -43,6 +43,12 @@ from ..prompts import load as load_prompt
 PARSED_DIR = Path("data/parsed")
 OUT_DIR = Path("data/wiki/pages")
 
+# Sheets whose wiki page is **curated by another builder** (carry.py) and must not be
+# recompiled here: they're engine sheets absent from `_raw` (so load_values can't read
+# them), and their page is hand-authored. compile --all skips them; naming one explicitly
+# is a no-op with a warning.
+CURATED_SHEETS = ("성과보수, 배당금",)
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -120,9 +126,29 @@ def value_series(vals: dict, item: dict, axis_cols: dict) -> list[tuple[str, obj
 _PROSE_SYS = load_prompt("wiki_prose_system")
 
 
+def _context(sheet: str) -> str:
+    """A one-line 분류 gloss (section/group/kind/case) to anchor the prose.
+
+    Lets the LLM write a *discriminating* lead sentence — and describe a sheet from its
+    identity when its facts are thin — instead of a generic "이 시트는 ~를 나타냅니다".
+    Deferred import: ``index`` imports from ``compile`` at module load, so importing
+    ``classify`` at top level here would form a cycle.
+    """
+    from .index import classify  # deferred to avoid the index<->compile import cycle
+
+    c = classify(sheet)
+    gloss = " / ".join(p for p in (c.get("section"), c.get("group"), c.get("kind")) if p)
+    line = f"분류: {gloss}" if gloss else ""
+    if c.get("case"):
+        line += f"  (케이스: {c['case']})"
+    return line
+
+
 def _prose(sheet: str, meta: dict, facts: list[str]) -> str:
-    body = "\n".join(facts) or "(no grounded line items)"
+    body = "\n".join(facts) or "(사실 항목 없음 — 분류 정보만으로 이 표의 성격·용도를 설명할 것)"
+    ctx = _context(sheet)
     user = (f"Sheet: {sheet!r}  (case={meta.get('case')}, unit={meta.get('unit')})\n"
+            f"{ctx}\n"
             f"Facts:\n{body}\n\nSummary:")
     try:
         return chat([{"role": "system", "content": _PROSE_SYS},
@@ -212,7 +238,7 @@ if __name__ == "__main__":
 
     parsed_files = {p.stem: p for p in PARSED_DIR.glob("*.json")}
     if "--all" in args:
-        names = sorted(parsed_files)
+        names = [s for s in sorted(parsed_files) if s not in CURATED_SHEETS]
     else:
         names = names_arg or ["DCF 장표 #2_DTT"]
 
@@ -225,6 +251,8 @@ if __name__ == "__main__":
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     def _compile_and_write(name: str) -> str:
+        if name in CURATED_SHEETS:
+            return f"-- skipping {name!r} — curated by carry.py (not compiled here)"
         if name not in parsed_files:
             return f"!! no parsed JSON for {name!r} — run parse_llm first"
         parsed = json.loads(parsed_files[name].read_text(encoding="utf-8"))
