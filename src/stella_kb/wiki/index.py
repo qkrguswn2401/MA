@@ -30,7 +30,7 @@ import openpyxl
 
 from .. import WORKBOOK
 from ..graph.extract import build_dependency_graph
-from .compile import canon_unit, sheet_links, value_series
+from .compile import page_currency, sheet_links, value_series
 
 PARSED_DIR = Path("data/parsed")
 PAGES_DIR = Path("data/wiki/pages")
@@ -215,7 +215,7 @@ def build_index() -> dict:
             "group": cls["group"],
             "kind": cls["kind"],
             "case": meta.get("case") or cls["case"],
-            "unit": canon_unit(meta.get("unit")),
+            "unit": page_currency(meta, items, sheet)[0],
             "period": _period(axis),
             "data_status": _data_status(items, vals, axis.get("columns") or {}),
             "n_items": len(items),

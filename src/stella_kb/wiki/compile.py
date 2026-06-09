@@ -99,6 +99,59 @@ def unit_display(raw: object) -> str:
     return _UNIT_GLOSS.get(c, c)
 
 
+def _local_ccy(sheet: str) -> str:
+    """The local currency (LCU) for an EIU-style macro sheet."""
+    if "(US)" in sheet:
+        return "USD"
+    if "(KR)" in sheet:
+        return "KRW"
+    return "LCU"
+
+
+def row_unit(label: object, sheet: str) -> str:
+    """Per-row currency/unit for a 'Mixed' macro sheet, read from the label's wording.
+
+    EIU labels embed the unit: ``Real GDP (LCU)``, ``Nominal GDP (US$)``, ``Budget balance
+    (% of GDP)``, ``Exchange rate LCU:US$``. LCU resolves to the sheet's local currency
+    (KRW for the KR sheet, USD for the US sheet) so currency is never left implicit.
+    """
+    s = str(label or "")
+    low = s.casefold()
+    if "exchange rate" in low or "환율" in s or "lcu:us$" in low:
+        return f"FX ({_local_ccy(sheet)}:US$)"
+    if "%" in s:                                   # before US$: "% HHs … >US$100k" is a percentage
+        return "%"
+    if "us$" in low or "us dollar" in low or "달러" in s:
+        return "USD"
+    if "lcu" in low or "현지통화" in s:
+        return _local_ccy(sheet)
+    if "population" in low or "인구" in s:
+        return "명 (persons)"
+    return ""
+
+
+def page_currency(meta: dict, items: list, sheet: str) -> tuple[str, str, dict]:
+    """Resolve a page's currency presentation — never the bare word 'Mixed'.
+
+    Returns ``(token, callout, per_row)``:
+      - ``token``   — compact currency label for frontmatter + the index ToC.
+      - ``callout`` — bilingual currency line shown under the page title.
+      - ``per_row`` — ``{cell: unit}`` when the sheet genuinely mixes currencies (else
+        ``{}``), which adds a per-row ``unit`` column to the Line-items table.
+    """
+    base = canon_unit(meta.get("unit"))
+    if base != "Mixed":
+        return base or "n/a", unit_display(meta.get("unit")), {}
+    per_row = {it.get("label_cell"): row_unit(it.get("label"), sheet) for it in items
+               if row_unit(it.get("label"), sheet)}
+    seen = list(dict.fromkeys(per_row.values()))                 # distinct, in first-seen order
+    ccys = [c for c in ("KRW", "USD") if c in seen]
+    token = ("·".join(ccys) + " 등") if ccys else "행별 단위"
+    callout = ("행별 단위 (per-row — 아래 표의 `unit` 열 참조) · 포함 단위: " + ", ".join(seen)
+               if seen else "행별 단위 (per-row — 아래 표의 `unit` 열 참조)")
+    return token, callout, per_row
+
+
 def load_values(sheet: str) -> dict[str, object]:
     """``{coordinate: cached value}`` for one sheet (ground truth for the facts table)."""
     wb = openpyxl.load_workbook(WORKBOOK, data_only=True, read_only=True)
@@ -206,6 +259,9 @@ def compile_page(sheet: str, parsed: dict, vals: dict,
             if a and a not in aliases:
                 aliases.append(a)
 
+    # currency/unit: a precise token + callout, and per-row units when the sheet mixes them
+    ccy_token, ccy_callout, per_row = page_currency(meta, items, sheet)
+
     # facts table rows (deterministic) + a compact facts block for the prose call
     periods = [str(y) for y in axis_cols.values()] if axis_cols else []
     table_rows, facts_lines = [], []
@@ -222,9 +278,10 @@ def compile_page(sheet: str, parsed: dict, vals: dict,
             cells = " | ".join([joined] + [""] * (len(periods) - 1))
         else:
             cells = " | ".join(f"{p}={_fmt(v)}" for p, v, _ in series)
+        ucol = f" {per_row.get(it.get('label_cell'), '')} |" if per_row else ""
         table_rows.append(
             f"| {it.get('label','')} | {it.get('label_ko') or ''} | "
-            f"{it.get('role','')} | `{it.get('label_cell','')}` | {cells} |")
+            f"{it.get('role','')} |{ucol} `{it.get('label_cell','')}` | {cells} |")
         if series:
             facts_lines.append(
                 f"- {it.get('label','')} ({it.get('label_ko') or ''}) "
@@ -236,23 +293,25 @@ def compile_page(sheet: str, parsed: dict, vals: dict,
     out.append(f"section: {meta.get('title') or ''}")
     if meta.get("case"):
         out.append(f"case: {meta['case']}")
-    out.append(f"unit: {canon_unit(meta.get('unit'))}")
+    out.append(f"unit: {ccy_token}")
     if aliases:
         out.append("aliases: [" + ", ".join(aliases) + "]")
     out += ["---", "", f"# {meta.get('title') or sheet}", "",
-            f"> **통화·단위 (Currency / Unit): {unit_display(meta.get('unit'))}** — "
-            "이 페이지의 모든 금액 수치에 적용됩니다.", ""]
+            f"> **통화·단위 (Currency / Unit): {ccy_callout}**"
+            + ("" if per_row else " — 이 페이지의 모든 금액 수치에 적용됩니다."), ""]
 
     out += ["## What this is", ""]
     out.append(_prose(sheet, meta, facts_lines) if use_llm
                else "_(scaffold only — run without --no-llm for prose)_")
     out.append("")
 
-    _u = canon_unit(meta.get("unit"))
-    out += [f"## Line items — 단위/unit: {_u or 'n/a'}", ""]
-    header = "| Item | KO | role | cell |" + ("".join(f" {p} |" for p in periods)
-                                              if periods else " values |")
-    sep = "|---|---|---|---|" + ("---|" * len(periods) if periods else "---|")
+    out += [f"## Line items — 단위/unit: {ccy_token}"
+            + ("  (행별 단위는 아래 unit 열 참조)" if per_row else ""), ""]
+    ucol_h = " unit |" if per_row else ""
+    ucol_s = "---|" if per_row else ""
+    header = f"| Item | KO | role |{ucol_h} cell |" + ("".join(f" {p} |" for p in periods)
+                                                       if periods else " values |")
+    sep = f"|---|---|---|{ucol_s}---|" + ("---|" * len(periods) if periods else "---|")
     out += [header, sep, *table_rows]
 
     link = links.get(sheet, {})
