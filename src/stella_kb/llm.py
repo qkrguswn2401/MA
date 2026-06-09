@@ -75,9 +75,44 @@ def resolve_metric(term: str, timeout: float = 60.0) -> dict:
     return obj
 
 
+def resolve_metrics(question: str, max_metrics: int = 4, timeout: float = 60.0) -> list[str]:
+    """Map a question to the **set** of Metric ids it asks about (the multi-hop fan-out).
+
+    Comparative / cross-metric questions ("compare the management and performance fees")
+    resolve to several ids; single-metric questions to one. Same whitelist guard as
+    ``resolve_metric`` — every returned id must be in ``METRIC_IDS`` — applied per element,
+    so a hallucinated id is dropped rather than trusted. Order-preserving, deduplicated,
+    capped at ``max_metrics``.
+    """
+    sys = load_prompt("resolve_metrics_system")
+    user = f"Catalog:\n{_catalog()}\n\nQuestion: {question!r}\nJSON array:"
+    raw = chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
+               max_tokens=120, timeout=timeout)
+    s = raw.strip()
+    if "```" in s:                       # strip ```json fences if present
+        s = s.split("```")[1].lstrip("json").strip() if s.count("```") >= 2 else s.strip("`")
+    start, end = s.find("["), s.rfind("]")
+    try:
+        arr = json.loads(s[start:end + 1])
+    except (ValueError, json.JSONDecodeError):
+        return []
+    out: list[str] = []
+    for x in arr:
+        mid = x.get("id") if isinstance(x, dict) else x  # tolerate [{"id":..}] or ["id"]
+        if mid in METRIC_IDS and mid not in out:         # whitelist guard, per element
+            out.append(mid)
+        if len(out) >= max_metrics:
+            break
+    return out
+
+
 if __name__ == "__main__":
     print(f"endpoint: {BASE_URL}  model: {MODEL}\n")
     for term in ["관리수수료", "carry", "discount rate", "성과보수", "EV", "누적 AUM",
                  "퇴직급여충당부채", "그냥 아무 말"]:
         r = resolve_metric(term)
         print(f"  {term:16s} -> {str(r.get('id')):26s} (conf {r.get('confidence')})")
+    print("\nmulti-metric fan-out:")
+    for q in ["compare the management fee and the performance fee",
+              "EBITDA와 FCFF 추이", "what is the equity value?"]:
+        print(f"  {q:48s} -> {resolve_metrics(q)}")

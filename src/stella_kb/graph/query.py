@@ -94,29 +94,55 @@ def evidence(g: nx.DiGraph, mid: str) -> str:
 # --- resolve + answer ------------------------------------------------------------------
 
 def resolve(question: str) -> str | None:
-    """Question -> Metric node id (``Metric:...``) via the whitelist-guarded LLM mapper."""
+    """Question -> a single Metric node id (``Metric:...``) via the whitelist-guarded mapper."""
     r = llm.resolve_metric(question)
     return f"Metric:{r['id']}" if r.get("id") else None
 
 
-def ask(question: str, synthesize: bool = True, g: nx.DiGraph | None = None) -> str:
-    """Resolve -> gather graph evidence -> (optionally) LLM-synthesize a cited answer."""
+def resolve_all(question: str, max_metrics: int = 4) -> list[str]:
+    """Question -> the **set** of focal Metric node ids (multi-hop fan-out, whitelist-guarded).
+
+    Comparative / cross-metric questions yield several ids; single-metric ones yield one.
+    Falls back to the single-metric resolver if the fan-out finds nothing, so a plain
+    question never regresses.
+    """
+    mids = [f"Metric:{i}" for i in llm.resolve_metrics(question, max_metrics)]
+    if not mids:
+        one = resolve(question)
+        if one:
+            mids = [one]
+    return mids
+
+
+def ask(question: str, synthesize: bool = True, g: nx.DiGraph | None = None,
+        max_metrics: int = 4) -> str:
+    """Resolve focal metric(s) -> gather graph evidence for each -> synthesize a cited answer.
+
+    Multi-hop: a comparison resolves to >1 focal metric, each metric's evidence is gathered
+    deterministically (and is itself multi-hop — ``drivers`` walks the DRIVES/ASSUMPTION_OF
+    chain), and the LLM writes one joint answer over all the evidence blocks.
+    """
     if g is None:
         g = load_graph()
-    mid = resolve(question)
-    if mid is None or mid not in g:
+    mids = [m for m in resolve_all(question, max_metrics) if m in g]
+    if not mids:
         return "Could not resolve the question to a known metric in the graph."
-    ev = evidence(g, mid)
+    blocks = [evidence(g, m) for m in mids]
+    ev = "\n\n".join(blocks)
     if not synthesize:
         return ev
     sys = (
-        "You answer M&A valuation questions about Centroid using ONLY the evidence block. "
-        "Do not invent numbers. Cite the source cell (e.g. DCF!K59) for every figure you "
-        "state. Units are KRW millions unless the value is a rate/date. Be concise."
+        "You answer M&A valuation questions about Centroid using ONLY the evidence blocks. "
+        "The evidence may cover one metric or several — when the question compares metrics, "
+        "compare them explicitly (cite each side). Do not invent numbers. Cite the source "
+        "cell (e.g. DCF!K59) for every figure you state. When a metric notes its case "
+        "(MGT/DTT), say which case the number is from. Units are KRW millions unless the "
+        "value is a rate/date. Be concise."
     )
-    user = f"Question: {question}\n\nEvidence:\n{ev}\n\nAnswer:"
+    plural = "s" if len(mids) > 1 else ""
+    user = f"Question: {question}\n\nEvidence ({len(mids)} metric{plural}):\n{ev}\n\nAnswer:"
     return llm.chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
-                    max_tokens=400)
+                    max_tokens=500)
 
 
 if __name__ == "__main__":
@@ -126,7 +152,10 @@ if __name__ == "__main__":
         "What is the equity value and what drives it?",
         "관리수수료 추이가 어떻게 되나요?",          # "how does the management fee trend?"
         "What discount rate (WACC) is used?",
+        "관리보수와 성과보수를 비교하면?",            # comparative -> multi-metric fan-out
+        "Compare EBITDA and FCFF over the projection.",
     ]:
         print("Q:", q)
+        print("  focal metrics:", resolve_all(q))
         print(ask(q, g=g))
         print("-" * 70)

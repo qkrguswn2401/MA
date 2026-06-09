@@ -6,6 +6,8 @@ actually produced parallel branches) rather than exact wording, which varies by 
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from apps.agent.core import run
@@ -26,3 +28,16 @@ def test_comparison_fans_out_to_parallel_branches():
     # the planner should split this; each sub-question runs as its own branch (distinct sub)
     branch_subs = {e["sub"] for e in r["trace"] if 0 <= e.get("sub", -1) < 10**9}
     assert len(branch_subs) >= 2, "comparison should fan out into >= 2 solve branches"
+
+
+def test_graph_query_comparison_fans_out_to_two_metrics():
+    """The graph query layer resolves a comparison to >1 focal metric and cites both."""
+    from src.stella_kb.graph import query
+
+    if not os.path.exists(query.GRAPH_PATH):
+        pytest.skip("graph not built — run `python -m src.stella_kb.graph.semantic`")
+    g = query.load_graph()
+    mids = query.resolve_all("관리보수와 성과보수를 비교하면?")
+    assert {"Metric:management_fee", "Metric:performance_fee"} <= set(mids)
+    ev = query.ask("관리보수와 성과보수를 비교하면?", synthesize=False, g=g)
+    assert "Management Fee" in ev and "Performance Fee" in ev  # both metrics' evidence gathered

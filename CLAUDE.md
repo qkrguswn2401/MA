@@ -200,16 +200,18 @@ encodes — keep them in mind for any new extraction:
   391,912) and 제8호 (20,048) clear the hurdle; the rest are 0. **Export to disk** is wired:
   `python -m src.stella_kb.graph.semantic` writes `data/stella_graph.json` (node-link JSON;
   `export()` also does GraphML). Metric layer ≈ **102 metrics**.
-- **Query layer (v1) built**: `query.py` does resolve → traverse → synthesize. `resolve()`
-  maps a question to a Metric id via `llm.resolve_metric` (whitelist-guarded); deterministic
-  helpers (`series`/`drivers`/`source_cells`/`evidence`) gather graph evidence with source
-  cells; the LLM only writes the final prose from that evidence and must cite cells. Answers
-  KO and EN. Loads `data/stella_graph.json`.
+- **Query layer (v2, multi-hop) built**: `query.py` does resolve → traverse → synthesize.
+  `resolve_all()` maps a question to the **set** of focal Metric ids via `llm.resolve_metrics`
+  (whitelist-guarded, order-preserving, capped; falls back to single `resolve()`), so a
+  comparison fans out to several metrics ("관리보수와 성과보수 비교" → both series). Each metric's
+  evidence is gathered deterministically and is itself multi-hop (`drivers` walks the
+  DRIVES/ASSUMPTION_OF chain to depth 6); `series`/`source_cells`/`evidence` carry source
+  cells; the LLM only writes one joint prose answer over all blocks and must cite cells.
+  Answers KO and EN. Loads `data/stella_graph.json`.
 - **Not yet built**: the `_MGT`/`_DTT` case as parallel metric values across the *whole*
   model (per-fund carry already carries both via `value`/`value_mgt`, but the DCF/revenue
-  series still read only the active DTT case), and a **multi-hop agent loop** (v1 query resolves a
-  single focal metric; cross-metric or comparative questions need iterative traversal).
-  `classify_sheets` (and
+  series still read only the active DTT case — so "compare MGT vs DTT equity value" can't yet
+  be answered from the graph even though the fan-out resolves it). `classify_sheets` (and
   the `metrics.py` anchors) are hand-curated and brittle to renames — an LLM labelling pass
   (the OpenKB approach, seeded by the sheet-name taxonomy in `docs/workbook_analysis.md`)
   can extend coverage without touching graph construction. `metrics.py` values come from
