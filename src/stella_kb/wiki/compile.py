@@ -180,6 +180,65 @@ def sheet_links() -> dict[str, dict[str, list[str]]]:
     return {s: {k: sorted(v) for k, v in d.items()} for s, d in links.items()}
 
 
+def tables_of(parsed: dict) -> list[dict]:
+    """Normalize a parsed sheet to a list of ``{title, year_axis, line_items}`` tables.
+
+    A sheet may stack several tables on different axes (a monthly roster + an annual 월평균
+    table); the parser emits those under ``tables``. A plain single-axis sheet is returned
+    as one untitled table, so every consumer can iterate uniformly.
+    """
+    if parsed.get("tables"):
+        return [{"title": t.get("title"), "year_axis": t.get("year_axis") or {},
+                 "line_items": t.get("line_items") or []} for t in parsed["tables"]]
+    return [{"title": None, "year_axis": parsed.get("year_axis") or {},
+             "line_items": parsed.get("line_items") or []}]
+
+
+def usable_tables(parsed: dict, vals: dict) -> list[dict]:
+    """Tables worth rendering: those that resolve to a real time series (≥2 distinct periods).
+
+    A multi-table sheet can yield a degenerate "table" — a qualitative block (e.g. an org
+    chart listing job titles per year, with no clean numeric axis) collapses to <2 periods.
+    Dropping those keeps such junk off the page (and out of the alias index). Never returns
+    empty: a legitimate single-table sheet with a thin axis is kept as-is.
+    """
+    tables = tables_of(parsed)
+    keep = [t for t in tables if len(periods_of(t.get("year_axis") or {}, vals)[1]) >= 2]
+    return keep or tables
+
+
+def all_items(parsed: dict, vals: dict | None = None) -> list[dict]:
+    """Every line item across a sheet's tables (for aliases / currency / index).
+
+    With ``vals`` given, restricts to :func:`usable_tables` so dropped degenerate tables
+    don't leak their labels into the alias index; without it, spans every table.
+    """
+    tables = usable_tables(parsed, vals) if vals is not None else tables_of(parsed)
+    return [it for t in tables for it in t["line_items"]]
+
+
+def periods_of(axis: dict, vals: dict) -> tuple[dict, list[str], list[str]]:
+    """``(axis_cols, periods, period_labels)`` for one table's axis.
+
+    Periods are deduped on the resolved period, keeping the **last column** per period. For a
+    monthly date axis this is the period-end collapse (Dec, or the last available month) —
+    turning a roster's monthly Total row into a clean year-end series. For the usual one
+    column per year it is a no-op. ``period_labels`` show the kept column's own header text
+    (``Dec-20``, ``FY23``, the basis date) so month/half granularity stays visible.
+    """
+    axis_cols = axis.get("columns") or {}
+    axis_row = axis.get("row")
+    last_col = {}
+    for col, period in axis_cols.items():
+        last_col[str(period)] = col            # later columns overwrite -> period-end wins
+    periods = list(last_col)
+    labels = []
+    for p in periods:
+        hdr = vals.get(f"{last_col[p]}{axis_row}") if axis_row else None
+        labels.append(_fmt(hdr) if hdr not in (None, "") else p)
+    return axis_cols, periods, labels
+
+
 def value_series(vals: dict, item: dict, axis_cols: dict) -> list[tuple[str, object, str]]:
     """``(period_label, value, cell_ref)`` for a line item, read from real cells.
 
@@ -245,12 +304,49 @@ def _prose(sheet: str, meta: dict, facts: list[str]) -> str:
 
 # --------------------------------------------------------------------------- compile
 
+def _render_table(table: dict, vals: dict, per_row: dict) -> tuple[list[str], list[str]]:
+    """Build one table's facts rows (markdown) + a compact facts block for the prose call."""
+    axis_cols, periods, period_labels = periods_of(table.get("year_axis") or {}, vals)
+    table_rows, facts_lines = [], []
+    for it in table.get("line_items") or []:
+        series = value_series(vals, it, axis_cols)
+        # each period carries its own value cell ([J6]) so the agent can cite the exact period
+        # cell, not just the row's label cell — without this the retriever can only pull one
+        # scalar per row (the cell-on-page guard rejects any per-period cell it can't see).
+        sval = {p: f"{_fmt(v)} [{ref}]" for p, v, ref in series}
+        if periods and any(p in sval for p in periods):
+            cells = " | ".join(sval.get(p, "") for p in periods)
+        elif periods:
+            # off-axis scalar (e.g. the DCF summary box: EV/Equity in column E, not on the
+            # year axis). value_series found it but its key isn't a year — surface the
+            # value(s) with the cell ref in the first column rather than blanking the row.
+            joined = ", ".join(f"{_fmt(v)} [{ref}]" for _, v, ref in series)
+            cells = " | ".join([joined] + [""] * (len(periods) - 1))
+        else:
+            cells = " | ".join(f"{p}={_fmt(v)} [{ref}]" for p, v, ref in series)
+        ucol = f" {per_row.get(it.get('label_cell'), '')} |" if per_row else ""
+        table_rows.append(
+            f"| {it.get('label','')} | {it.get('label_ko') or ''} | "
+            f"{it.get('role','')} |{ucol} `{it.get('label_cell','')}` | {cells} |")
+        if series:
+            facts_lines.append(
+                f"- {it.get('label','')} ({it.get('label_ko') or ''}) "
+                f"[{it.get('label_cell')}]: "
+                + ", ".join(f"{p}={_fmt(v)} [{ref}]" for p, v, ref in series))
+
+    ucol_h = " unit |" if per_row else ""
+    ucol_s = "---|" if per_row else ""
+    header = f"| Item | KO | role |{ucol_h} cell |" + ("".join(f" {p} |" for p in period_labels)
+                                                       if period_labels else " values |")
+    sep = f"|---|---|---|{ucol_s}---|" + ("---|" * len(periods) if periods else "---|")
+    return [header, sep, *table_rows], facts_lines
+
+
 def compile_page(sheet: str, parsed: dict, vals: dict,
                  links: dict, whitelist: set, use_llm: bool) -> str:
     meta = parsed.get("meta") or {}
-    axis = parsed.get("year_axis") or {}
-    axis_cols = axis.get("columns") or {}
-    items = parsed.get("line_items") or []
+    tables = usable_tables(parsed, vals)
+    items = all_items(parsed, vals)
 
     # gather aliases for the header (the words->node resolver)
     aliases = []
@@ -262,31 +358,15 @@ def compile_page(sheet: str, parsed: dict, vals: dict,
     # currency/unit: a precise token + callout, and per-row units when the sheet mixes them
     ccy_token, ccy_callout, per_row = page_currency(meta, items, sheet)
 
-    # facts table rows (deterministic) + a compact facts block for the prose call
-    periods = [str(y) for y in axis_cols.values()] if axis_cols else []
-    table_rows, facts_lines = [], []
-    for it in items:
-        series = value_series(vals, it, axis_cols)
-        sval = {p: _fmt(v) for p, v, _ in series}
-        if periods and any(p in sval for p in periods):
-            cells = " | ".join(sval.get(p, "") for p in periods)
-        elif periods:
-            # off-axis scalar (e.g. the DCF summary box: EV/Equity in column E, not on the
-            # year axis). value_series found it but its key isn't a year — surface the
-            # value(s) with the cell ref in the first column rather than blanking the row.
-            joined = ", ".join(f"{_fmt(v)} [{ref}]" for _, v, ref in series)
-            cells = " | ".join([joined] + [""] * (len(periods) - 1))
-        else:
-            cells = " | ".join(f"{p}={_fmt(v)}" for p, v, _ in series)
-        ucol = f" {per_row.get(it.get('label_cell'), '')} |" if per_row else ""
-        table_rows.append(
-            f"| {it.get('label','')} | {it.get('label_ko') or ''} | "
-            f"{it.get('role','')} |{ucol} `{it.get('label_cell','')}` | {cells} |")
-        if series:
-            facts_lines.append(
-                f"- {it.get('label','')} ({it.get('label_ko') or ''}) "
-                f"[{it.get('label_cell')}]: "
-                + ", ".join(f"{p}={_fmt(v)} [{ref}]" for p, v, ref in series))
+    # one facts section per table (a sheet may stack several on different axes)
+    sections, facts_lines = [], []
+    for t in tables:
+        rows, facts = _render_table(t, vals, per_row)
+        title = t.get("title")
+        heading = (f"## {title} — 단위/unit: {ccy_token}" if title
+                   else f"## Line items — 단위/unit: {ccy_token}")
+        sections += [heading + ("  (행별 단위는 아래 unit 열 참조)" if per_row else ""), "", *rows, ""]
+        facts_lines += facts
 
     # --- assemble markdown ---
     out = ["---", f"sheet: {sheet}"]
@@ -305,14 +385,7 @@ def compile_page(sheet: str, parsed: dict, vals: dict,
                else "_(scaffold only — run without --no-llm for prose)_")
     out.append("")
 
-    out += [f"## Line items — 단위/unit: {ccy_token}"
-            + ("  (행별 단위는 아래 unit 열 참조)" if per_row else ""), ""]
-    ucol_h = " unit |" if per_row else ""
-    ucol_s = "---|" if per_row else ""
-    header = f"| Item | KO | role |{ucol_h} cell |" + ("".join(f" {p} |" for p in periods)
-                                                       if periods else " values |")
-    sep = f"|---|---|---|{ucol_s}---|" + ("---|" * len(periods) if periods else "---|")
-    out += [header, sep, *table_rows]
+    out += sections
 
     link = links.get(sheet, {})
     dep = [f"[[{s}]]" for s in link.get("depends_on", []) if s in whitelist]

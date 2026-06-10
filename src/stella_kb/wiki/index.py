@@ -30,7 +30,7 @@ import openpyxl
 
 from .. import WORKBOOK
 from ..graph.extract import build_dependency_graph
-from .compile import page_currency, sheet_links, value_series
+from .compile import all_items, page_currency, sheet_links, usable_tables, value_series
 
 PARSED_DIR = Path("data/parsed")
 PAGES_DIR = Path("data/wiki/pages")
@@ -118,23 +118,26 @@ def load_all_values() -> dict[str, dict]:
     return out
 
 
-def _period(axis: dict) -> str | None:
-    """Year range string from an axis's column->year map, e.g. ``2021–2029``."""
-    years = [v for v in (axis.get("columns") or {}).values() if isinstance(v, int)]
+def _period(tables: list) -> str | None:
+    """Year range string across all of a sheet's table axes, e.g. ``2021–2029``."""
+    years = [v for t in tables for v in (t.get("year_axis") or {}).get("columns", {}).values()
+             if isinstance(v, int)]
     return f"{min(years)}–{max(years)}" if years else None
 
 
-def _data_status(items: list, vals: dict, axis_cols: dict) -> str:
-    """Routing signal: are the line-item cells real numbers, errors, or empty?"""
+def _data_status(tables: list, vals: dict) -> str:
+    """Routing signal: are the line-item cells real numbers, errors, or empty? (all tables)."""
     real = ref = 0
-    for it in items:
-        for _, v, _ in value_series(vals, it, axis_cols):
-            if isinstance(v, bool):
-                continue
-            if isinstance(v, (int, float)):
-                real += 1
-            elif isinstance(v, str) and v.startswith("#"):  # #REF!, #DIV/0!, ...
-                ref += 1
+    for t in tables:
+        axis_cols = (t.get("year_axis") or {}).get("columns") or {}
+        for it in t.get("line_items") or []:
+            for _, v, _ in value_series(vals, it, axis_cols):
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, (int, float)):
+                    real += 1
+                elif isinstance(v, str) and v.startswith("#"):  # #REF!, #DIV/0!, ...
+                    ref += 1
     if real == 0 and ref > 0:
         return "none"
     if ref > 0:
@@ -186,7 +189,9 @@ def build_index() -> dict:
     for sheet, data in parsed.items():
         cls = classify(sheet)
         meta = data.get("meta") or {}
-        items = data.get("line_items") or []
+        vals = all_vals.get(sheet, {})
+        tables = usable_tables(data, vals)
+        items = all_items(data, vals)
 
         # per-page alias set + feed the global alias index (term -> page+cell)
         page_aliases: list[str] = []
@@ -203,9 +208,6 @@ def build_index() -> dict:
                 if not any(h["page"] == sheet and h["cell"] == cell for h in bucket):
                     bucket.append({"page": sheet, "cell": cell, "term": t})
 
-        axis = data.get("year_axis") or {}
-        vals = all_vals.get(sheet, {})
-
         link = links.get(sheet, {})
         entry = {
             "sheet": sheet,
@@ -216,8 +218,8 @@ def build_index() -> dict:
             "kind": cls["kind"],
             "case": meta.get("case") or cls["case"],
             "unit": page_currency(meta, items, sheet)[0],
-            "period": _period(axis),
-            "data_status": _data_status(items, vals, axis.get("columns") or {}),
+            "period": _period(tables),
+            "data_status": _data_status(tables, vals),
             "n_items": len(items),
             "has_page": sheet in pages_on_disk,
             "aliases": page_aliases,

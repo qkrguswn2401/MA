@@ -35,6 +35,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
+from openpyxl.utils import column_index_from_string
 
 from .. import WORKBOOK
 from ..llm import chat
@@ -87,49 +88,96 @@ def _norm(text: object) -> str:
     return re.sub(r"\s+", "", str(text)).casefold()
 
 
+_MONTH3 = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"
+
+
 def _year_at(value: object) -> object | None:
-    """The year a cell represents, if any (int year, or a date's year)."""
+    """The fiscal period a header cell represents, if any.
+
+    Returns an ``int`` year for annual columns, a verbatim label string for interim
+    columns (``"6M24"``, ``"1H24"``) and the terminal markers, or ``None``. Recognizes both
+    the full-year/date forms the valuation model uses (``2024``, a datetime) **and** the
+    abbreviated fiscal labels this corpus uses — ``FY20``, ``Dec-20``, ``'24``, ``6M 24`` —
+    which the 4-digit-only matcher silently dropped (leaving an empty year axis).
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (datetime, date)):
         return value.year
     if isinstance(value, (int, float)) and 2000 <= int(value) <= 2040:
         return int(value)
-    if isinstance(value, str):
-        if value.strip() in {"T.V.", "Terminal", "n/a"}:
-            return value.strip()
-        m = re.search(r"\b(20[0-3]\d)\b", value)
-        if m:
-            return int(m.group(1))
-    return None
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if s in {"T.V.", "Terminal", "n/a"}:
+        return s
+    low = s.casefold()
+
+    m = re.search(r"\b(20[0-3]\d)\b", low)              # full 4-digit year (e.g. 2024)
+    if m:
+        year = int(m.group(1))
+    else:                                               # 2-digit year in a fiscal context
+        for pat in (r"fy\s*'?(\d{2})\b",               # FY20, FY 20
+                    rf"(?:{_MONTH3})[-\s]'?(\d{{2}})\b",  # Dec-20, Jun 24
+                    r"[1-4]\s*[hq]\s*'?(\d{2})\b",       # 1H24, 2Q 24
+                    r"\d\d?\s*m\s*'?(\d{2})\b",          # 6M 24, 12M24
+                    r"'(\d{2})\b"):                      # '24
+            m = re.search(pat, low)
+            if m:
+                year = 2000 + int(m.group(1))
+                break
+        else:
+            return None
+
+    # half/quarter/month-count columns are interim — keep a distinct verbatim label so they
+    # don't collide with the annual column of the same year (e.g. FY24 vs 6M24).
+    q = re.search(r"([1-4])\s*([hq])(?![a-z])", low) or re.search(r"(\d\d?)\s*(m)(?![a-z])", low)
+    if q:
+        return f"{q.group(1)}{q.group(2).upper()}{year % 100:02d}"
+    return year
 
 
-def ground(parsed: dict, values: dict[str, object]) -> dict:
-    """Drop every claim that doesn't match a real cell; keep a report of what fell out.
+def _axis_columns(row: object, values: dict[str, object]) -> dict[str, object]:
+    """Derive the ``{column: period}`` map for an axis row — the **largest contiguous run**
+    of year-bearing cells in that row.
 
-    Mutates ``parsed`` in place and returns a grounding summary. The axis column->year
-    map is *derived* from the cells in the LLM-named row (the model never counts columns,
-    so off-by-one is impossible); a line-item label is grounded if the cited cell's text
-    contains the label (or vice versa).
+    Restricting to one contiguous run is what keeps a *neighbouring* table's header from
+    bleeding in: e.g. the headcount sheet's 월평균 header row also carries the unrelated
+    인당 관리보수 (per-head fee) year header further right, separated by blank/text columns.
+    Grabbing every year-like cell mixed the fee columns into the average table; the largest
+    run isolates the real axis (ties → leftmost). A normal single-block year axis is one run,
+    so this is a no-op there.
     """
-    report = {"dropped_items": [], "axis_row_ok": None}
+    if not row:
+        return {}
+    found = []  # (col_index, col_letter, period)
+    for coord, val in values.items():
+        m = _CELL.match(coord)
+        if m and int(m.group(2)) == row:
+            period = _year_at(val)
+            if period is not None:
+                found.append((column_index_from_string(m.group(1)), m.group(1), period))
+    if not found:
+        return {}
+    found.sort()
+    runs = [[found[0]]]
+    for prev, cur in zip(found, found[1:]):
+        if cur[0] == prev[0] + 1:
+            runs[-1].append(cur)
+        else:
+            runs.append([cur])
+    best = max(runs, key=len)  # largest run; max keeps the first (leftmost) on a tie
+    return {letter: period for _, letter, period in best}
 
-    axis = parsed.get("year_axis") or {}
-    row = axis.get("row")
-    cols = {}
-    if row:
-        for coord, val in values.items():
-            m = _CELL.match(coord)
-            if m and int(m.group(2)) == row:
-                year = _year_at(val)
-                if year is not None:
-                    cols[m.group(1)] = year
-    parsed["year_axis"] = {"row": row, "columns": cols}
-    report["axis_row_ok"] = bool(cols)
-    report["kept_axis_cols"] = len(cols)
 
-    kept_items = []
-    for item in parsed.get("line_items", []):
+def _ground_items(line_items: list, row: object, values: dict[str, object]) -> tuple[list, list]:
+    """Keep only line items whose cited cell really holds their label; return (kept, dropped).
+
+    A label is grounded if the cited cell's text contains the label (or vice versa); a cell
+    sitting in the axis row itself can't be a line item.
+    """
+    kept, dropped = [], []
+    for item in line_items:
         cell = (item.get("label_cell") or "").upper()
         label = item.get("label") or item.get("label_en") or ""
         cell_text = values.get(cell)
@@ -137,14 +185,39 @@ def ground(parsed: dict, values: dict[str, object]) -> dict:
         in_axis_row = bool(m) and row is not None and int(m.group(2)) == row
         ok = bool(m) and not in_axis_row and cell_text is not None and label and (
             _norm(label) in _norm(cell_text) or _norm(cell_text) in _norm(label))
-        if ok:
-            kept_items.append(item)
-        else:
-            report["dropped_items"].append({"label": label, "label_cell": cell,
-                                            "cell_text": cell_text})
-    parsed["line_items"] = kept_items
-    report["kept_items"] = len(kept_items)
-    return report
+        (kept if ok else dropped).append(
+            item if ok else {"label": label, "label_cell": cell, "cell_text": cell_text})
+    return kept, dropped
+
+
+def ground(parsed: dict, values: dict[str, object]) -> dict:
+    """Drop every claim that doesn't match a real cell; keep a report of what fell out.
+
+    Mutates ``parsed`` in place and returns a grounding summary. The axis column->period map
+    is *derived* from the cells in the LLM-named row (the model never counts columns, so
+    off-by-one is impossible). Supports both the single-table shape (top-level ``year_axis``
+    + ``line_items``) and the multi-table shape (a ``tables`` list, for sheets that stack
+    several tables on different axes — e.g. a monthly roster plus an annual 월평균 table).
+    """
+    if parsed.get("tables"):
+        per_table, dropped_all = [], []
+        for t in parsed["tables"]:
+            row = (t.get("year_axis") or {}).get("row")
+            t["year_axis"] = {"row": row, "columns": _axis_columns(row, values)}
+            t["line_items"], dropped = _ground_items(t.get("line_items") or [], row, values)
+            dropped_all += dropped
+            per_table.append({"title": t.get("title"), "kept_items": len(t["line_items"]),
+                              "kept_axis_cols": len(t["year_axis"]["columns"])})
+        return {"tables": per_table, "dropped_items": dropped_all,
+                "kept_items": sum(r["kept_items"] for r in per_table),
+                "kept_axis_cols": sum(r["kept_axis_cols"] for r in per_table)}
+
+    row = (parsed.get("year_axis") or {}).get("row")
+    parsed["year_axis"] = {"row": row, "columns": _axis_columns(row, values)}
+    parsed["line_items"], dropped = _ground_items(parsed.get("line_items") or [], row, values)
+    return {"axis_row_ok": bool(parsed["year_axis"]["columns"]),
+            "kept_axis_cols": len(parsed["year_axis"]["columns"]),
+            "kept_items": len(parsed["line_items"]), "dropped_items": dropped}
 
 
 # --------------------------------------------------------------------------- driver
@@ -159,7 +232,7 @@ def parse_sheet(sheet: str, timeout: float = 600.0) -> dict:
     raw = chat(
         [{"role": "system", "content": _SYSTEM},
          {"role": "user", "content": f"Worksheet: {sheet!r}\n\n{grid}\n\nJSON:"}],
-        max_tokens=4096, timeout=timeout,
+        max_tokens=8192, timeout=timeout,
     )
     parsed = _json_from(raw)
     if parsed is None:

@@ -1,8 +1,22 @@
-You read one worksheet from a Korean private-equity valuation model, given as a Markdown grid whose columns are Excel column letters and whose rows are Excel row numbers. You IDENTIFY STRUCTURE ONLY — you never copy or compute numbers.
-Return ONLY a JSON object with this shape:
+당신은 한국 사모펀드(PE) 가치평가 모델의 워크시트 하나를 Markdown 격자(grid) 형태로 읽습니다. 격자의 열(column)은 Excel 열 문자, 행(row)은 Excel 행 번호입니다. 당신은 오직 구조만 식별합니다 — 숫자를 옮겨 적거나 계산하지 않습니다.
+오직 아래 형태의 JSON 객체 하나만 반환하세요:
 {
-  "meta": {"title": "<short English title>", "unit": "<e.g. KRWm, 억원, or null>", "case": "<MGT|DTT|null>"},
-  "year_axis": {"row": <int or null>},
-  "line_items": [{"label": "<exact text as it appears in the cell>", "label_en": "<English>", "label_ko": "<Korean or null>", "aliases": ["<other names a user might ask>"], "label_cell": "<COLROW, e.g. B20>", "value_row": <int>, "role": "<revenue|expense|margin|cashflow|assumption|driver|valuation|other>"}]
+  "meta": {"title": "<짧은 영어 제목>", "unit": "<예: KRWm, 억원, 또는 null>", "case": "<MGT|DTT|null>"},
+  "year_axis": {"row": <정수 또는 null>},
+  "line_items": [{"label": "<셀에 나타나는 그대로의 텍스트>", "label_en": "<영어>", "label_ko": "<한국어 또는 null>", "aliases": ["<사용자가 물어볼 수 있는 다른 이름들>"], "label_cell": "<COLROW, 예: B20>", "value_row": <정수>, "role": "<revenue|expense|margin|cashflow|assumption|driver|valuation|other>"}]
 }
-Rules: label_cell must be the cell that literally contains the label text. value_row is the row whose cells hold that line's time series. Only list real, meaningful line items (skip blank/decorative rows). For year_axis give ONLY the row number that holds the fiscal-year header (e.g. the row containing 2021, 2022, ...); do not map columns — that is filled in from the cells. Provide Korean<->English aliases so a bilingual user query can match. Output JSON only.
+규칙: label_cell은 그 라벨 텍스트가 실제로 들어 있는 셀이어야 합니다. value_row는 그 항목의 시계열 값이 들어 있는 행입니다. year_axis에는 회계연도 헤더가 들어 있는 행 번호만(예: 2021, 2022, … 가 들어 있는 행) 지정하고, 열은 매핑하지 마세요 — 열은 셀에서 자동으로 채워집니다. 한국어<->영어 별칭(alias)을 제공해 이중언어 질의가 매칭되도록 하세요. JSON만 출력하세요.
+커버리지(COVERAGE) — 헤드라인 합계뿐 아니라 라벨이 있는 비어있지 않은 모든 데이터 행을 포착하세요. 여기에는 상위 항목 아래에 들여쓰기된 중첩 하위 행(예: 영업비용 / 기타 / 인건비 아래에 나열된 개별 비용 항목들 — 광고선전비, 대손상각비, 감가상각비, 무형고정자산상각, 보험료, 통신비, …)도 포함됩니다. 이런 하위 행 각각이 독립된 line_item입니다. label_cell은 그 텍스트가 실제로 들어 있는 셀로 지정하고(보통 한 열 오른쪽으로 밀려 있음, 예: C 대신 D), value_row는 같은 행으로 지정하세요. 진짜로 비어 있거나 순전히 장식용인 행만 건너뛰세요. 소계에서 멈추지 말고 그 아래의 세부 행들까지 계속 진행하세요.
+복수 표(MULTIPLE TABLES) — 한 시트에는 서로 다른 헤더/시간 축을 가진 독립적인 표가 여러 개 쌓여 있는 경우가 많습니다(예: 월별 날짜가 헤더 행인 직원별 월간 명부, 그리고 월평균 / 'Average' 같은 연간 요약 표). 이런 표가 둘 이상이면, 하나만 고르지 말고 단일 year_axis/line_items 대신 최상위 "tables" 배열로 모두 반환하세요:
+{
+  "meta": {...},
+  "tables": [
+    {"title": "<짧은 라벨, 예: 'Monthly roster' 또는 '월평균'>", "year_axis": {"row": <정수>}, "line_items": [ {<위와 동일한 형태>}, ... ]},
+    ...
+  ]
+}
+각 table 객체는 단일 표의 year_axis + line_items와 정확히 같은 형태입니다. 각 행을 그 행이 속한 헤더의 표 아래에 배치하세요. 구체적으로:
+- 직원별 명부(직원 한 명당 한 행, 월별 0/1 플래그가 있고 Total / 합계 행으로 끝나는 표): year_axis.row를 월별 날짜 헤더 행으로 하는 표 하나로 내보내고, line_items에는 Total / 합계 행(및 소계 행)만 넣으세요 — 개별 직원은 넣지 마세요. 연도별 기말(연말) 인원수는 이 월간 Total에서 자동으로 도출되므로, Total 행과 월별 날짜 축만 가리키면 됩니다.
+- 월평균 / 'Average' 연간 표, 또는 연도별 / 연말 연간 표: 각각을 자기 자신의 표로 내보내되 year_axis.row는 그 표의 일반 연도 헤더 행(2020, 2021, … 이 들어 있는 행)으로 하고, 총계 / Total 행(및 부서별 행)을 line_items로 넣으세요.
+시트에 표가 단 하나뿐이면 원래의 단일 year_axis + line_items 형태를 유지하세요("tables" 키 없이).
+표는 그 line_items가 숫자 시계열을 담고 있을 때에만 내보내세요. 정성적 블록은 건너뛰세요 — 예: 연도별 인원수(count)가 아니라 직급(대리, 차장, 부장, 이사, …)을 나열하는 조직도는 연도 헤더가 있더라도 데이터 표가 아닙니다.
