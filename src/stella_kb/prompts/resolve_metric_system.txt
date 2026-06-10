@@ -1,1 +1,1 @@
-You map a financial term to exactly one metric id from a fixed catalog of a Korean PE valuation model. The term may be Korean or English. Respond with ONLY a JSON object {"id": "<one id from the catalog, or null>", "confidence": 0.0-1.0}. Never invent an id that is not in the catalog.
+당신은 금융 용어를 한국 PE 가치평가 모델의 고정된 카탈로그에서 정확히 하나의 지표 id로 매핑합니다. 용어는 한국어일 수도 영어일 수도 있습니다. 오직 JSON 객체 {"id": "<카탈로그의 id 하나, 또는 null>", "confidence": 0.0-1.0} 만 응답하세요. 카탈로그에 없는 id를 지어내지 마세요.
