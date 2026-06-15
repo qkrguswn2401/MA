@@ -19,6 +19,17 @@ PY="${PY:-.venv/bin/python}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-5001}"
 
+# DART backend needs a bearer token to reach the shared DART MCP server (SSE :8002).
+# The token lives in mcps/dart-mcp/.env (gitignored, never in source); load it here so
+# auto/dart-routed questions can authenticate. Absent token → wiki still works; dart 503s.
+DART_ENV="mcps/dart-mcp/.env"
+if [ -z "${DART_MCP_TOKEN:-}" ] && [ -f "$DART_ENV" ]; then
+  DART_MCP_TOKEN="$(grep -E '^DART_MCP_TOKEN=' "$DART_ENV" | head -1 | cut -d= -f2-)"
+  export DART_MCP_TOKEN
+fi
+[ -n "${DART_MCP_TOKEN:-}" ] && echo "    DART_MCP_TOKEN loaded (dart backend enabled)" \
+                             || echo "    DART_MCP_TOKEN unset (dart backend will 503; wiki unaffected)"
+
 echo "==> checking wiki artifacts ..."
 if [ ! -f data/wiki/index.json ]; then
   echo "    !! data/wiki/index.json missing — build the wiki first: ./run_pipeline.sh"

@@ -32,3 +32,6 @@ frontend/dist/
 # Local agent/session state
 .claude/
 docs/agent_graph.png
+
+# detached server logs (run_server.sh / vite)
+.run/
