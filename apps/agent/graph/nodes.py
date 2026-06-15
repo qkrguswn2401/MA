@@ -14,7 +14,9 @@ JSON-per-turn (ReAct-style) contract.
 
 from __future__ import annotations
 
+import ast
 import json
+import operator as _op
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +32,7 @@ PLANNER = load_prompt("planner")
 ROUTER = load_prompt("router")
 RETRIEVER = load_prompt("retriever")
 VERIFIER = load_prompt("verifier")
+COMPUTE = load_prompt("compute")
 SYNTHESIZER = load_prompt("synthesizer")
 
 _FANOUT = max(1, config.agent_fanout())  # concurrent LLM requests cap
@@ -340,6 +343,83 @@ def auditor_node(state: AgentState, index: dict) -> AgentState:
     }
 
 
+# ----------------------------------------------------------------------- compute (arithmetic)
+_CALC_OPS = {ast.Add: _op.add, ast.Sub: _op.sub, ast.Mult: _op.mul, ast.Div: _op.truediv,
+             ast.USub: _op.neg, ast.UAdd: _op.pos}
+
+
+def _calc_eval(n):
+    if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+        return n.value
+    if isinstance(n, ast.BinOp) and type(n.op) in _CALC_OPS:
+        return _CALC_OPS[type(n.op)](_calc_eval(n.left), _calc_eval(n.right))
+    if isinstance(n, ast.UnaryOp) and type(n.op) in _CALC_OPS:
+        return _CALC_OPS[type(n.op)](_calc_eval(n.operand))
+    raise ValueError("non-arithmetic node")
+
+
+def safe_calc(expr: str) -> float | None:
+    """Evaluate a PURE arithmetic expression — numbers and ``+ - * / ( )`` only. Returns None
+    for anything else (names, calls, attributes), so it's injection-safe (no ``eval``). Strips
+    thousands separators first."""
+    try:
+        return _calc_eval(ast.parse(str(expr).replace(",", ""), mode="eval").body)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fmt_num(v: float) -> str:
+    return f"{int(v):,}" if float(v).is_integer() else f"{round(v, 4):,}"
+
+
+# Salvage complete {"label":..,"expr":..} objects straight from the raw text. With a large
+# evidence set the model proposes one ratio per line item and the JSON array truncates at the
+# token cap — parse_action then fails wholesale and we'd lose *every* computation, including the
+# ones that finished. This regex recovers each complete object (the cut-off last one just won't
+# match), so a truncated response still yields the figures the question needs.
+_COMP_RE = re.compile(r'"label"\s*:\s*"([^"]*)"\s*,\s*"expr"\s*:\s*"([^"]*)"')
+
+
+def _computations(act: dict | None, raw: str) -> list:
+    """Computation dicts from the parsed action, falling back to a regex salvage on truncation."""
+    comps = (act or {}).get("computations")
+    if isinstance(comps, list) and comps:
+        return comps
+    return [{"label": lbl, "expr": expr} for lbl, expr in _COMP_RE.findall(raw)]
+
+
+def compute_node(state: AgentState) -> AgentState:
+    """Deterministic arithmetic between the auditor and the synthesizer.
+
+    The synthesizer must not do mental math (the local model is unreliable at it). This node asks
+    the LLM ONLY to pick the operands+operators — it emits arithmetic *expressions* over the
+    evidence numbers — and **code evaluates them** with the safe AST calculator above. So derived
+    figures (합계·차이·비율·배수·%·평균) are exact and auditable (expr + result), and the
+    synthesizer reports them instead of computing. No expr → nothing added (harmless)."""
+    ev = state.get("evidence", [])
+    if not ev:
+        return {"computed": [],
+                "trace": [_rec(_SYNTH_ORDER - 1, 1, "compute", "calc", "0", "근거 없음")]}
+    ev_txt = "\n".join(f"- {e['term']}{_per(e)} = {e['value']}  ({e['cell']})" for e in ev)
+    # 1200 tokens gives headroom so the JSON array doesn't truncate on large evidence sets;
+    # _computations() additionally salvages complete objects if it does. raw is kept for that.
+    act, raw = _ask(COMPUTE, f"질문: {state['question']}\n\n근거 수치:\n{ev_txt}\n\n계산 JSON:", 1200)
+    computed: list[dict] = []
+    for c in _computations(act, raw):
+        if not isinstance(c, dict):
+            continue
+        expr = str(c.get("expr", "")).strip()
+        val = safe_calc(expr)
+        if val is not None and expr:
+            computed.append({"label": str(c.get("label", "")).strip(),
+                             "expr": expr, "value": _fmt_num(val)})
+    if state.get("verbose"):
+        print(f"[compute] {len(computed)} value(s)")
+    return {"computed": computed,
+            "trace": [_rec(_SYNTH_ORDER - 1, 1, "compute", "calc",
+                           f"{len(computed)} value(s)", (act or {}).get("thought", ""))]}
+
+
 # ----------------------------------------------------------------------- synthesizer
 def synthesizer_node(state: AgentState) -> AgentState:
     """Write the final cited Korean answer from the accumulated evidence + traced paths."""
@@ -360,12 +440,19 @@ def synthesizer_node(state: AgentState) -> AgentState:
 
     # deterministic audit flags (dup-cell-across-asks, pdf-only claims, unanswered sub-Qs) —
     # the synthesizer must honor these and not over-claim agreement past them.
+    # deterministic arithmetic from the compute node — the synthesizer reports these, never
+    # recomputes them (the local model is unreliable at multi-step math).
+    computed = state.get("computed", [])
+    comp_block = ("\n\n계산 결과(deterministic — 직접 산술하지 말고 이 값을 그대로 사용):\n"
+                  + "\n".join(f"- {c['label']}: {c['value']}  (= {c['expr']})"
+                              for c in computed)) if computed else ""
+
     caveats = state.get("caveats", [])
     caveat_block = ("\n\n감사 경고(AUDIT — 반드시 반영, 무시 금지):\n"
                     + "\n".join(f"- {c}" for c in caveats)) if caveats else ""
 
     user = (f"Question: {state['question']}\n\nEvidence collected from the wiki:\n{ev_txt}"
-            f"{path_block}{caveat_block}\n\nWrite the final answer JSON.")
+            f"{path_block}{comp_block}{caveat_block}\n\nWrite the final answer JSON.")
     act, raw = _ask(SYNTHESIZER, user, 700)
     text = ((act or {}).get("text") or raw or "").strip() or "(빈 답변)"
     return {

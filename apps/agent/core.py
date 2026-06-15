@@ -74,7 +74,7 @@ def _renumber(trace: list) -> list:
 
 
 def _limit() -> dict:
-    # planner → solve (fan-out) → auditor → synthesizer = 4 supersteps; give headroom
+    # planner → solve (fan-out) → auditor → compute → synthesizer = 5 supersteps; give headroom
     return {"recursion_limit": 25}
 
 

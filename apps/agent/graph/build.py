@@ -18,7 +18,7 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
-from .nodes import auditor_node, planner_node, solve_node, synthesizer_node
+from .nodes import auditor_node, compute_node, planner_node, solve_node, synthesizer_node
 from .state import AgentState
 
 
@@ -37,11 +37,13 @@ def build_app(index: dict):
     g.add_node("planner", planner_node)
     g.add_node("solve", lambda s: solve_node(s, index))
     g.add_node("auditor", lambda s: auditor_node(s, index))
+    g.add_node("compute", compute_node)
     g.add_node("synthesizer", synthesizer_node)
 
     g.add_edge(START, "planner")
     g.add_conditional_edges("planner", _fanout, ["solve"])
     g.add_edge("solve", "auditor")
-    g.add_edge("auditor", "synthesizer")
+    g.add_edge("auditor", "compute")          # deterministic arithmetic over merged evidence
+    g.add_edge("compute", "synthesizer")
     g.add_edge("synthesizer", END)
     return g.compile()
