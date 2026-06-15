@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -25,6 +24,7 @@ from pathlib import Path
 
 import fitz  # pymupdf
 
+from ...config import pdf_describe_concurrency, pdf_page_png_cache
 from . import vision
 from .state import SourceAbbrev, SourcePage
 from .tables import PdfTablePayload, extract_tables_from_markdown
@@ -33,7 +33,7 @@ from .text import parse_pdf
 log = logging.getLogger("stella_kb.parsers.pdf.describe")
 
 DEFAULT_DPI = 220
-_PAGE_CACHE_DIR = Path(os.environ.get("PDF_PAGE_PNG_CACHE", ".cache/pages"))
+_PAGE_CACHE_DIR = Path(pdf_page_png_cache())
 _VISION_RETRIES = 3  # vision flake (빈 응답 등) 재시도 — backoff 2s/5s
 
 _SYSTEM = (
@@ -106,7 +106,7 @@ def describe_pdf(
     if max_pages is not None:
         total = min(total, max_pages)
     if concurrency is None:
-        concurrency = max(1, int(os.getenv("MNA_PDF_DESCRIBE_CONCURRENCY", "4")))
+        concurrency = max(1, pdf_describe_concurrency())
     resolved_model = model or vision.MODEL
 
     file_sha = hashlib.sha256(path.read_bytes()).hexdigest()[:16]

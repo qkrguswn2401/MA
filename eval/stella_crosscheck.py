@@ -24,6 +24,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from src.stella_kb import config
+
 ROOT = Path(__file__).resolve().parents[1]
 CASE = ROOT / "test_data" / "rag_test_dataset" / "stella_case"
 TEST_XLSX = str(CASE / "files" / "RAG_0604_테스트용_Input.xlsx")
@@ -313,7 +315,7 @@ def run_eval(workers: int = 8) -> None:
     index = _point_agent_at_eval_index()
     qs = load_questions()
     workers = min(workers, len(qs))
-    nodes.set_fanout(int(os.getenv("STELLA_EVAL_FANOUT", str(workers))))  # don't starve workers
+    nodes.set_fanout(config.eval_fanout(default=workers))  # don't starve workers
     app = build_app(index)                                                # compile once, reuse
     print(f"answering {len(qs)} questions · {workers} workers · fanout {nodes._FANOUT}")
     with ThreadPoolExecutor(max_workers=workers) as ex:

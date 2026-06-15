@@ -1,0 +1,33 @@
+# Central non-secret configuration for the Stella KB project.
+#
+# Precedence per value:  environment variable  >  this file  >  built-in default
+# (resolved by src/stella_kb/config.py). So any STELLA_*/MNA_*/RAGAS_* env var still
+# overrides — scripts and per-run overrides keep working unchanged.
+#
+# SECRETS (DART_MCP_TOKEN, DART_API_KEY) are NOT here — they live in .env (gitignored).
+# Point at an alternate file with the STELLA_CONFIG env var.
+
+llm:
+  # Shared gemma-4 vLLM (wiki build, agent synthesis, RAGAS judge, PDF vision).
+  url: http://123.37.5.219:8001/v1        # env: STELLA_LLM_URL
+  model: gemma-4-31B-it                    # env: STELLA_LLM_MODEL
+  tool:                                    # DART tool-calling agent (may differ from above)
+    url: http://123.37.5.219:8001/v1       # env: STELLA_TOOL_LLM_URL
+    model: gemma-4-31B-it                  # env: STELLA_TOOL_LLM_MODEL
+
+concurrency:
+  parse: 6            # env: STELLA_CONCURRENCY           (wiki parse_llm + compile)
+  fanout: 4           # env: STELLA_FANOUT                (agent sub-question fan-out)
+  eval_fanout: 8      # env: STELLA_EVAL_FANOUT           (eval workers / agent fanout)
+  ragas: 6            # env: RAGAS_CONCURRENCY            (ragas async ascore)
+  pdf_describe: 4     # env: MNA_PDF_DESCRIBE_CONCURRENCY (per-page vision calls)
+
+parsing:
+  max_table_pages: 80   # env: MNA_PARSE_MAX_TABLE_PAGES  (pdfplumber table-extract cap)
+
+cache:
+  pdf_vision: .cache/pdf_vision   # env: PDF_VISION_CACHE   (vision describe result cache)
+  pdf_page_png: .cache/pages      # env: PDF_PAGE_PNG_CACHE  (rendered page PNGs)
+
+dart:
+  mcp_url: http://127.0.0.1:8002/sse   # env: DART_MCP_URL  (non-secret; token stays in .env)

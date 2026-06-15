@@ -28,14 +28,13 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
-import os
 from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
 
-from .. import WORKBOOK
+from .. import WORKBOOK, config
 from ..graph.extract import build_dependency_graph
 from ..llm import chat
 from ..prompts import load as load_prompt
@@ -432,7 +431,7 @@ if __name__ == "__main__":
 
     # Prose calls run concurrently (bounded); scaffold-only is CPU-light but harmless.
     workers = (1 if not use_llm
-               else max(1, min(int(os.environ.get("STELLA_CONCURRENCY", "6")), len(names))))
+               else max(1, min(config.parse_concurrency(), len(names))))
     print(f"compiling {len(names)} pages with {workers} worker(s) ...")
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         for msg in ex.map(_compile_and_write, names):

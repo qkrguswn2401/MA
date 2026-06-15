@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
-import os
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -37,7 +36,7 @@ from pathlib import Path
 import openpyxl
 from openpyxl.utils import column_index_from_string
 
-from .. import WORKBOOK
+from .. import WORKBOOK, config
 from ..llm import chat
 from ..prompts import load as load_prompt
 
@@ -271,7 +270,7 @@ if __name__ == "__main__":
 
     # Concurrent requests — vLLM batches them, so throughput >> sequential. Bounded to
     # keep load light on the shared endpoint (override with STELLA_CONCURRENCY).
-    workers = max(1, min(int(os.environ.get("STELLA_CONCURRENCY", "6")), len(sheets)))
+    workers = max(1, min(config.parse_concurrency(), len(sheets)))
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"parsing {len(sheets)} sheets with {workers} concurrent workers ...")
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:

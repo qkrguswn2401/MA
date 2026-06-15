@@ -18,15 +18,16 @@ import base64
 import hashlib
 import json
 import logging
-import os
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-BASE_URL = os.environ.get("STELLA_LLM_URL", "http://123.37.5.219:8001/v1")
-MODEL = os.environ.get("STELLA_LLM_MODEL", "gemma-4-31B-it")
+from ...config import llm_model, llm_url, pdf_vision_cache
 
-_CACHE_DIR = Path(os.environ.get("PDF_VISION_CACHE", ".cache/pdf_vision"))
+BASE_URL = llm_url()
+MODEL = llm_model()
+
+_CACHE_DIR = Path(pdf_vision_cache())
 
 log = logging.getLogger("stella_kb.parsers.pdf.vision")
 

@@ -15,11 +15,11 @@ JSON-per-turn (ReAct-style) contract.
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from src.stella_kb import config
 from src.stella_kb.llm import chat
 
 from ..io import lookup, open_page, trace_links
@@ -32,7 +32,7 @@ RETRIEVER = load_prompt("retriever")
 VERIFIER = load_prompt("verifier")
 SYNTHESIZER = load_prompt("synthesizer")
 
-_FANOUT = max(1, int(os.getenv("STELLA_FANOUT", "4")))  # concurrent LLM requests cap
+_FANOUT = max(1, config.agent_fanout())  # concurrent LLM requests cap
 _LLM_SEM = threading.Semaphore(_FANOUT)  # guards the shared guest vLLM from overload
 _SYNTH_ORDER = 10**9  # sorts the synthesizer's trace entry last, after every branch
 

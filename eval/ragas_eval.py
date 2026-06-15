@@ -36,8 +36,9 @@ import asyncio
 import csv
 import json
 import math
-import os
 from pathlib import Path
+
+from src.stella_kb import config
 
 ROOT = Path(__file__).resolve().parents[1]
 EVAL_DIR = ROOT / "data" / "eval_stella"
@@ -45,9 +46,9 @@ ANSWERS_JSON = EVAL_DIR / "answers.json"
 RAGAS_CSV = EVAL_DIR / "ragas_scores.csv"
 RAGAS_MD = EVAL_DIR / "ragas_report.md"
 
-BASE_URL = os.environ.get("STELLA_LLM_URL", "http://123.37.5.219:8001/v1")
-MODEL = os.environ.get("STELLA_LLM_MODEL", "gemma-4-31B-it")
-CONCURRENCY = int(os.environ.get("RAGAS_CONCURRENCY", "6"))
+BASE_URL = config.llm_url()
+MODEL = config.llm_model()
+CONCURRENCY = config.ragas_concurrency()
 
 METRIC_COLS = ["grounded_faithfulness", "answer_correctness", "context_recall",
                "retrieval_sufficiency"]

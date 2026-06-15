@@ -21,6 +21,8 @@ import os
 import re
 from pathlib import Path
 
+from src.stella_kb import config
+
 try:                                  # load repo-root .env so secrets stay out of source,
     from dotenv import load_dotenv    # mirroring the server side (mcps/dart-mcp/dart.py).
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -29,9 +31,9 @@ except ImportError:                   # dotenv optional — fall back to a real 
 
 # NB: the gemma-4 tool-calling container isn't reachable on 127.0.0.1 from this box
 # (a docker loopback quirk) — use the host IP that works, matching test_mcps.py.
-TOOL_LLM_URL = os.environ.get("STELLA_TOOL_LLM_URL", "http://123.37.5.219:8001/v1")
-TOOL_LLM_MODEL = os.environ.get("STELLA_TOOL_LLM_MODEL", "gemma-4-31B-it")
-DART_MCP_URL = os.environ.get("DART_MCP_URL", "http://127.0.0.1:8002/sse")
+TOOL_LLM_URL = config.tool_llm_url()
+TOOL_LLM_MODEL = config.tool_llm_model()
+DART_MCP_URL = config.dart_mcp_url()
 DART_MCP_TOKEN = os.environ.get("DART_MCP_TOKEN", "")  # required; no secret baked into source
 
 

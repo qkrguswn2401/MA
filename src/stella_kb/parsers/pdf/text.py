@@ -6,12 +6,12 @@ text-strategy PDF 면 이 결과만으로도 충분(무료·결정론). pymupdf 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import fitz  # pymupdf
 import pdfplumber
 
+from ...config import max_table_pages
 from .state import SourceAbbrev, SourcePage
 
 log = logging.getLogger("stella_kb.parsers.pdf.text")
@@ -37,7 +37,7 @@ def parse_pdf(path: Path, abbrev: SourceAbbrev = "ETC") -> list[SourcePage]:
     path = Path(path)
     pages: list[SourcePage] = []
     doc = fitz.open(str(path))
-    table_cap = int(os.getenv("MNA_PARSE_MAX_TABLE_PAGES", "80"))
+    table_cap = max_table_pages()
     try:
         with pdfplumber.open(str(path)) as plumber_doc:
             total = len(doc)

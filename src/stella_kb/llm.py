@@ -15,14 +15,14 @@ so swapping in a hosted API is just two env vars.
 from __future__ import annotations
 
 import json
-import os
 import urllib.request
 
+from . import config
 from .graph.metrics import METRICS, METRIC_IDS
 from .prompts import load as load_prompt
 
-BASE_URL = os.environ.get("STELLA_LLM_URL", "http://123.37.5.219:8001/v1")
-MODEL = os.environ.get("STELLA_LLM_MODEL", "gemma-4-31B-it")
+BASE_URL = config.llm_url()
+MODEL = config.llm_model()
 
 
 def chat(messages: list[dict], temperature: float = 0.0, max_tokens: int = 512,
