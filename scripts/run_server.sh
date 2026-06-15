@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."                    # repo root, regardless of caller's c
 PY="${PY:-.venv/bin/python}"
 [ -x "$PY" ] || PY=python
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-5001}"
 
 echo "==> checking wiki artifacts ..."
 if [ ! -f data/wiki/index.json ]; then

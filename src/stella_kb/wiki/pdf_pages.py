@@ -89,6 +89,55 @@ def _grounded(value: str, text: str) -> bool:
     return len(v) >= 2 and v in _clean(text)
 
 
+# --- FDD -> Excel cross-references (deterministic) ----------------------------------------
+_FUND_NUM = re.compile(r"(\d+(?:-\d+)?)\s*호")  # number tied to 호 — used on clean group names
+# A fund *reference* inside FDD prose: a 호-number whose name is closed by PEF/펀드/Fund within a
+# short window. Requiring the fund word avoids matching legal/accounting clause numbers
+# ("제2조 제3호") as funds — the generic guard against number-only false positives.
+_FUND_REF = re.compile(r"(\d+(?:-\d+)?)\s*호[^,\n]{0,20}?(?:PEF|펀드|Fund)")
+
+
+def _norm(term: object) -> str:
+    return re.sub(r"\s+", "", str(term)).casefold()
+
+
+def _fund_match(group: str, blob_flat: str, blob_nums: set[str]) -> bool:
+    """Does an Excel per-fund **group name** identify the fund an FDD page references?
+
+    Derived from the group name itself — no hardcoded fund list, so it generalizes to whatever
+    per-fund groups exist: match on the **name-core** (``차이나1호`` → ``차이나``) as a substring,
+    or on the **호-number** (``제2호`` → ``2``) shared with the page. Handles the naming variance
+    (Excel ``차이나1호`` vs FDD ``센트로이드제1호차이나PEF``) without enumerating either side."""
+    core = re.sub(r"[제\s&]", "", _FUND_NUM.sub("", str(group)))
+    gnums = set(_FUND_NUM.findall(str(group)))
+    return (len(core) >= 2 and core in blob_flat) or bool(gnums & blob_nums)
+
+
+def _xrefs(entry: dict, index: dict, cap: int = 6) -> list[str]:
+    """Excel source pages an FDD page cross-references, via **fund identity** — deterministic.
+
+    A Biz Plan fund group whose name-core or 호-number (both derived from the group name, never
+    hardcoded) appears in this page's figure labels/aliases → that fund's source pages
+    (거래내역/비용). This is the bridge the alias index *can't* make: an FDD page names a fund as
+    '센트로이드제1호차이나PEF' while the Excel group is '차이나1호', and ledger rows aren't aliased.
+    Shared **line-item** terms (관리수수료/영업수익/Adjusted NAV …) are already cross-linked FDD↔Excel
+    by the alias index, so they are deliberately not duplicated here. Capped."""
+    pages = index.get("pages", {})
+    fund_pages: dict[str, list[str]] = {}
+    for nm, e in pages.items():
+        if e.get("source") != "PDF" and str(e.get("section", "")).startswith("Biz Plan"):
+            fund_pages.setdefault(e.get("group"), []).append(nm)
+
+    terms = " ".join(it.get("label") or "" for it in (entry.get("items") or [])) \
+        + " " + " ".join(entry.get("aliases") or [])
+    blob_flat, blob_nums = _norm(terms), set(_FUND_REF.findall(terms))
+    out: list[str] = []
+    for group, fpages in fund_pages.items():
+        if _fund_match(group, blob_flat, blob_nums):
+            out.extend(nm for nm in fpages if nm not in out)
+    return out[:cap]
+
+
 def structure_section(label: str, text: str, timeout: float = 600.0) -> dict:
     """LLM-structure one section's markdown; drop ungrounded figures. ``{}`` if unusable."""
     raw = chat(
@@ -108,7 +157,7 @@ def structure_section(label: str, text: str, timeout: float = 600.0) -> dict:
     return obj
 
 
-def _page_md(name: str, tag: str, label: str, s: dict) -> str:
+def _page_md(name: str, tag: str, label: str, s: dict, xref: list[str] | None = None) -> str:
     title = s.get("title") or label
     aliases = [a for a in (s.get("aliases") or []) if a]
     out = ["---", "source: PDF", f"page: {name}", f"tag: {tag}", f"section: {label}"]
@@ -134,20 +183,22 @@ def _page_md(name: str, tag: str, label: str, s: dict) -> str:
     ]
     for f in s.get("figures") or []:
         out.append(f"| {f.get('label','')} | {f.get('period','') or ''} | {f.get('value','')} [{tag}] |")
-    out += [
-        "",
-        "## Links",
-        "",
-        "- PDF 요약 — 동일 항목의 **엑셀 원천 페이지와 교차검증** 대상 (단위·기준일 차이 주의).",
-    ]
+    out += ["", "## Links", ""]
+    if xref:
+        out.append("- 엑셀 원천 (교차검증 대상): " + ", ".join(f"[[{x}]]" for x in xref))
+    out.append("- PDF 요약 — 동일 항목의 **엑셀 원천 페이지와 교차검증** 대상 (단위·기준일 차이 주의).")
     return "\n".join(out) + "\n"
 
 
-def build_pages(pdf_path: str, pages_dir: Path, structurer=structure_section) -> tuple[dict, dict, dict]:
+def build_pages(pdf_path: str, pages_dir: Path, structurer=structure_section,
+                index: dict | None = None) -> tuple[dict, dict, dict]:
     """Build PDF wiki pages and the index pieces to merge into an existing wiki index.
 
     Returns ``(pages_entries, alias_additions, tree_section)`` and writes ``<name>.md`` into
-    ``pages_dir``. One page per markdown H2 section; each tagged ``FDD<n>`` for provenance.
+    ``pages_dir``. One page per PDF page; each tagged ``FDD<n>`` for provenance. When ``index``
+    (the Excel-side wiki index) is given, each page also gets deterministic ``xref`` links to
+    its Excel source pages (see :func:`_xrefs`) — written into the entry and the page's Links
+    section, so the agent can hop from an FDD claim to its source ledger.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -166,11 +217,9 @@ def build_pages(pdf_path: str, pages_dir: Path, structurer=structure_section) ->
             continue  # nothing structured (cover/divider section) — keeps the FDD{i} slot
         tag = f"FDD{i}"
         name = f"FDD{i} — {label}"
-        (pages_dir / f"{name}.md").write_text(_page_md(name, tag, label, s), encoding="utf-8")
-
         page_aliases = [a for a in (s.get("aliases") or []) if a]
         labels = [f.get("label") for f in figs if f.get("label")]
-        entries[name] = {
+        entry = {
             "sheet": name,
             "title": s.get("title") or label,
             "desc": (s.get("summary") or "").split(". ")[0][:120] or None,
@@ -189,9 +238,12 @@ def build_pages(pdf_path: str, pages_dir: Path, structurer=structure_section) ->
             "feeds_into": [],
             "source": "PDF",
         }
+        entry["xref"] = _xrefs(entry, index) if index else []
+        (pages_dir / f"{name}.md").write_text(
+            _page_md(name, tag, label, s, entry["xref"]), encoding="utf-8")
+        entries[name] = entry
         for term in page_aliases + labels:
-            key = re.sub(r"\s+", "", str(term)).casefold()
-            aliases.setdefault(key, []).append({"page": name, "cell": tag, "term": term})
+            aliases.setdefault(_norm(term), []).append({"page": name, "cell": tag, "term": term})
         tree[SECTION].setdefault(label, []).append(name)
 
     return entries, aliases, tree
@@ -253,7 +305,7 @@ if __name__ == "__main__":
     index = strip_pdf(index)  # drop any prior PDF entries first
     for pdf in pdfs:
         print(f"pdf_pages: ingest {pdf}")
-        entries, alias_add, tree_add = build_pages(pdf, PAGES_DIR)
+        entries, alias_add, tree_add = build_pages(pdf, PAGES_DIR, index=index)
         merge_into_index(index, entries, alias_add, tree_add)
         print(f"   built {len(entries)} PDF page(s): {list(entries)}")
 

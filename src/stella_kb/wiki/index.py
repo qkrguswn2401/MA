@@ -279,6 +279,9 @@ def render_md(index: dict) -> str:
                     rel.append("→ " + ", ".join(f"[[{d}]]" for d in e["feeds_into"][:4]))
                 if rel:
                     out.append(f"  - links: {'  '.join(rel)}")
+                if e.get("xref"):  # FDD → Excel source pages (cross-check hop)
+                    out.append("  - 교차검증(엑셀 원천) → "
+                               + ", ".join(f"[[{x}]]" for x in e["xref"][:5]))
             out.append("")
     return "\n".join(out) + "\n"
 

@@ -153,12 +153,11 @@ def build_pdf() -> None:
 
     for stale in PAGES_DIR.glob("FDD*.md"):   # purge prior PDF pages so rebuild is clean
         stale.unlink()
-    print("[pdf] convert → markdown → sections → structure")
-    entries, alias_add, tree_add = pdf_pages.build_pages(TEST_PDF, PAGES_DIR)
-    print(f"   built {len(entries)} PDF page(s): {list(entries)}")
-
     idx = json.loads(INDEX_JSON.read_text(encoding="utf-8"))
-    idx = pdf_pages.strip_pdf(idx)            # drop any prior PDF entries before re-merging
+    idx = pdf_pages.strip_pdf(idx)            # Excel-only index → xref targets for build_pages
+    print("[pdf] vision parser → per-page markdown → sections → structure (+ xref)")
+    entries, alias_add, tree_add = pdf_pages.build_pages(TEST_PDF, PAGES_DIR, index=idx)
+    print(f"   built {len(entries)} PDF page(s): {list(entries)}")
     idx = pdf_pages.merge_into_index(idx, entries, alias_add, tree_add)
     INDEX_JSON.write_text(json.dumps(idx, ensure_ascii=False, indent=2), encoding="utf-8")
     INDEX_MD.write_text(wiki_index.render_md(idx), encoding="utf-8")
