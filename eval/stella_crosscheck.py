@@ -114,6 +114,11 @@ def build() -> None:
     print(f"   -> {INDEX_JSON}\n   -> {INDEX_MD}")
     print(f"   pages={len(idx['pages'])}  aliases={len(idx['alias_index'])}")
 
+    from src.stella_kb.wiki.ledger import write_ledgers  # 거래내역 row sidecars
+    led = write_ledgers(TEST_XLSX, [s for s in idx["pages"] if s.endswith("_거래내역")],
+                        WIKI_DIR / "ledgers")
+    print(f"   ledgers: {sum(led.values())} rows / {len(led)} sheet(s)")
+
 
 def buildall() -> None:
     """Full rebuild with the Excel and PDF pipelines **overlapped**. They share nothing until
@@ -272,6 +277,7 @@ def _point_agent_at_eval_index():
     tools.PAGES_DIR = PAGES_DIR            # open_page reads this module global
     tools.INDEX_JSON = INDEX_JSON
     tools.INDEX_MD = INDEX_MD
+    tools.LEDGERS_DIR = WIKI_DIR / "ledgers"   # query_ledger reads ledger sidecars
     core.INDEX_MD = INDEX_MD               # _seed reads the name bound into core
     return json.loads(INDEX_JSON.read_text(encoding="utf-8"))
 

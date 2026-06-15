@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src.stella_kb import config
 from src.stella_kb.llm import chat
 
-from ..io import lookup, open_page, trace_links
+from ..io import lookup, open_page, query_ledger, trace_links
 from ..prompts import load as load_prompt
 from .state import AgentState
 
@@ -197,6 +197,20 @@ def _retrieve(ask: str, pages: list) -> tuple[list, str]:
     return ev, f"{len(ev)} fact(s) from {pages}"
 
 
+def _ledger_evidence(picks: list, sub: dict) -> list:
+    """For any ``*_거래내역`` page picked, run the deterministic ledger filter+sum.
+
+    Transaction rows aren't on the wiki page (the time-series parse drops them), so the LLM
+    retriever finds nothing there. This pulls them from the ledger sidecar and sums 출금 by
+    적요 keyword (the sub-question's ``hint_terms``) deterministically — exact, cell-cited."""
+    kws = [k for k in (sub.get("hint_terms") or []) if k]
+    out: list = []
+    for p in picks:
+        if isinstance(p, str) and p.endswith("_거래내역"):
+            out += query_ledger(p, kws, sub.get("ask", ""))
+    return out
+
+
 def _verify(sub: dict, ev: list, path: dict | None) -> tuple[str, str]:
     """Judge whether the sub-question is answered. A traced chain is accepted as-is."""
     if sub.get("mode") == "trace" and path and path.get("chain"):
@@ -235,6 +249,10 @@ def solve_node(state: AgentState, index: dict) -> AgentState:
             paths.append(path)
 
         ev, summary = _retrieve(sub["ask"], picks)
+        led = _ledger_evidence(picks, sub)    # deterministic 거래내역 filter+sum (rows not on page)
+        if led:
+            ev = ev + led
+            summary += f"  +ledger({len(led)})"
         for e in ev:                          # keep first sighting of each cell on this branch
             key = (e["page"], e["cell"])
             if key not in seen:

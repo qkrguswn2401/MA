@@ -16,6 +16,7 @@ WIKI_DIR = Path("data/wiki")
 INDEX_MD = WIKI_DIR / "INDEX.md"
 INDEX_JSON = WIKI_DIR / "index.json"
 PAGES_DIR = WIKI_DIR / "pages"
+LEDGERS_DIR = WIKI_DIR / "ledgers"   # per-fund 거래내역 row sidecars (src/stella_kb/wiki/ledger.py)
 
 
 def load_index() -> dict:
@@ -117,3 +118,44 @@ def open_page(name: str) -> str:
         kept = [ln for ln in fm.splitlines() if not ln.startswith("aliases:")]
         text = "\n".join(kept) + "\n---\n" + body
     return f"OPEN {name!r}:\n{text}"
+
+
+def query_ledger(page: str, keywords: list[str], ask: str = "", cap: int = 10) -> list[dict]:
+    """Deterministic filter+sum over a ``*_거래내역`` ledger sidecar → evidence items.
+
+    Transaction ledgers are dropped by the time-series parse (rows aren't on the wiki page), so
+    this reads the row sidecar (``LEDGERS_DIR/<page>.json``), filters rows whose 적요 contains any
+    keyword, and **sums 출금 per currency** (USD→원화 via each row's rate) — no LLM arithmetic.
+    Returns evidence ``{page, cell, term, value, ask}``: the matched rows (capped), per-currency
+    and grand totals (with the contributing cells as provenance), and a ``0건 — 해당 적요 없음``
+    marker per keyword with no matches (the "그런 적요 자체가 없다" signal). Empty if no sidecar
+    or no usable keywords."""
+    from src.stella_kb.wiki.ledger import query_ledger_rows
+
+    path = LEDGERS_DIR / f"{page}.json"
+    kws = [str(k) for k in (keywords or []) if k and len(str(k)) >= 2]
+    if not path.exists() or not kws:
+        return []
+    q = query_ledger_rows(json.loads(path.read_text(encoding="utf-8")), kws)
+    out: list[dict] = []
+    cells_by_cur: dict[str, list[str]] = {}
+    for m in q["matched"]:
+        cur, ref = m.get("currency", "KRW"), str(m.get("ref", "")).split("!")[-1]
+        cells_by_cur.setdefault(cur, []).append(ref)
+    for m in q["matched"][:cap]:
+        out.append({"page": page, "cell": str(m.get("ref", "")).split("!")[-1],
+                    "term": f"{m.get('desc', '')} ({m.get('currency')} 출금)", "period": "",
+                    "value": f"{m.get('outflow')}", "ask": ask})
+    kw_label = "·".join(kws)
+    for cur, total in q["totals_krw"].items():
+        out.append({"page": page, "cell": "+".join(cells_by_cur.get(cur, [])) or "—",
+                    "term": f"{kw_label} 출금 합계 ({cur}{'→원화' if cur == 'USD' else ''})",
+                    "period": "", "value": f"{total:,}", "ask": ask})
+    if q["totals_krw"]:
+        out.append({"page": page, "cell": "ledger-sum",
+                    "term": f"{kw_label} 출금 총합(원화 환산)", "period": "",
+                    "value": f"{q['krw_total']:,}", "ask": ask})
+    for kw in q["absent"]:
+        out.append({"page": page, "cell": "—", "term": f"적요 '{kw}' 검색", "period": "",
+                    "value": "0건 — 해당 적요 없음", "ask": ask})
+    return out

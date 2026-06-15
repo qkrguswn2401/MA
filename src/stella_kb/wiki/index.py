@@ -292,6 +292,12 @@ if __name__ == "__main__":
     OUT_JSON.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
     OUT_MD.write_text(render_md(index), encoding="utf-8")
 
+    from .ledger import write_ledgers  # row sidecars for *_거래내역 (transaction ledgers)
+    led = write_ledgers(WORKBOOK, [s for s in index["pages"] if s.endswith("_거래내역")],
+                        OUT_JSON.parent / "ledgers")
+    print(f"  ledgers: {sum(led.values())} rows across {len(led)} sheet(s) -> "
+          f"{OUT_JSON.parent / 'ledgers'}")
+
     n_pages = len(index["pages"])
     n_alias = len(index["alias_index"])
     n_sections = len(index["tree"])
