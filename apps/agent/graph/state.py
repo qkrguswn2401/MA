@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     """Running state threaded through the multi-agent graph."""
     question: str          # the original user question
     index_md: str          # the wiki INDEX (ToC) text, handed to planner/router
+    wiki_dir: str          # per-request dataset dir for page/ledger reads (None → process default)
     plan: list             # [{ask, hint_terms, mode, direction}] from the planner
     sub: dict              # Send payload: the one sub-question this solve branch handles
     sub_idx: int           # Send payload: that sub-question's index (for trace grouping)

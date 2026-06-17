@@ -40,24 +40,30 @@ def route(question: str) -> str:
 
 
 def answer(question: str, source: str = "auto", max_steps: int = 3,
-           verbose: bool = False, index: dict | None = None) -> dict[str, Any]:
+           verbose: bool = False, index: dict | None = None, store: Any = None) -> dict[str, Any]:
     """Unified entry point: route (or honor an explicit ``source``) and dispatch.
 
     ``source`` is ``"auto"`` (route), ``"wiki"`` (Centroid KB), or ``"dart"`` (public co.).
+    ``store`` selects the wiki dataset (ignored by the DART backend, which has no wiki).
     Returns ``{source, answer, trace, steps}`` — same shape for both backends."""
     src = route(question) if source == "auto" else source
     if src == "dart":
         from .dart_agent import run_dart
         return {"source": "dart", **run_dart(question)}
     return {"source": "wiki",
-            **run(question, max_steps=max_steps, verbose=verbose, index=index)}
+            **run(question, max_steps=max_steps, verbose=verbose, index=index, store=store)}
 
 
-def _seed(question: str, max_steps: int, verbose: bool = False) -> AgentState:
-    """Initial graph state: INDEX ToC + the question. Each node builds its own prompt."""
+def _seed(question: str, max_steps: int, verbose: bool = False, store: Any = None) -> AgentState:
+    """Initial graph state: INDEX ToC + the question. Each node builds its own prompt.
+
+    ``store`` (a :class:`apps.agent.datasets.WikiStore`) selects the dataset for this run — its
+    INDEX.md seeds the planner and its dir threads to the page/ledger reads. ``None`` falls back
+    to the process-default wiki (``INDEX_MD`` global / ``tools`` globals)."""
     return {
         "question": question,
-        "index_md": INDEX_MD.read_text(encoding="utf-8"),
+        "index_md": store.index_md if store is not None else INDEX_MD.read_text(encoding="utf-8"),
+        "wiki_dir": str(store.wiki_dir) if store is not None else None,
         "plan": [], "evidence": [], "paths": [], "trace": [], "steps": 0,
         "max_steps": max_steps, "verbose": verbose,
     }
@@ -79,7 +85,7 @@ def _limit() -> dict:
 
 
 def run(question: str, max_steps: int = 3, verbose: bool = False,
-        index: dict | None = None, app: Any = None) -> dict[str, Any]:
+        index: dict | None = None, app: Any = None, store: Any = None) -> dict[str, Any]:
     """Navigate the wiki to answer ``question``; return ``{answer, trace, steps, evidence}``.
 
     ``trace`` is the per-turn routing record (which page it opened, why) — the whole point
@@ -88,12 +94,15 @@ def run(question: str, max_steps: int = 3, verbose: bool = False,
     (``[{page, cell, term, value, ask}]``) — the *retrieved context*, exposed for RAGAS-style
     evaluation; callers that don't need it can ignore the key.
 
-    ``app`` lets a caller pass a graph compiled once and reused across many questions (the
-    eval builds it per-question otherwise); when given, ``index`` is ignored.
+    ``store`` (a :class:`apps.agent.datasets.WikiStore`) selects the dataset (its index + dir);
+    it takes precedence over ``index``. ``app`` lets a caller pass a graph compiled once and
+    reused across many questions (the eval builds it per-question otherwise); when given,
+    ``index`` is ignored — but pass a matching ``store`` so the seeded dir lines up with it.
     """
     if app is None:
-        app = build_app(index if index is not None else load_index())
-    final: dict[str, Any] = app.invoke(_seed(question, max_steps, verbose), config=_limit())
+        idx = store.index if store is not None else (index if index is not None else load_index())
+        app = build_app(idx)
+    final: dict[str, Any] = app.invoke(_seed(question, max_steps, verbose, store), config=_limit())
     return {"answer": (final.get("answer") or "(no answer)").strip(),
             "trace": _renumber(final.get("trace", [])),
             "steps": final.get("steps", 0),
@@ -106,7 +115,7 @@ def ask(question: str, max_steps: int = 3, verbose: bool = False,
     return run(question, max_steps=max_steps, verbose=verbose, index=index)["answer"]
 
 
-def stream_run(question: str, max_steps: int = 3, index: dict | None = None):
+def stream_run(question: str, max_steps: int = 3, index: dict | None = None, store: Any = None):
     """Generator yielding routing events as the agent navigates, for live (SSE) display.
 
     Uses LangGraph's native ``app.stream(stream_mode="values")``: after every node the
@@ -116,10 +125,11 @@ def stream_run(question: str, max_steps: int = 3, index: dict | None = None):
       {"type": "step",   "step": int, "action": str, "arg": str, "thought": str}
       {"type": "answer", "answer": str, "steps": int}
     """
-    app = build_app(index if index is not None else load_index())
+    idx = store.index if store is not None else (index if index is not None else load_index())
+    app = build_app(idx)
     emitted = 0
     final: dict[str, Any] = {}
-    for state in app.stream(_seed(question, max_steps), config=_limit(),
+    for state in app.stream(_seed(question, max_steps, False, store), config=_limit(),
                             stream_mode="values"):
         final = state
         trace = state.get("trace", [])

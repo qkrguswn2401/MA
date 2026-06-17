@@ -28,14 +28,21 @@ from pathlib import Path
 
 import openpyxl
 
-from .. import WORKBOOK
+from ..config import (
+    wiki_index_json,
+    wiki_index_md,
+    wiki_pages_dir,
+    wiki_parsed_dir,
+    wiki_workbook,
+)
 from ..graph.extract import build_dependency_graph
 from .compile import all_items, page_currency, sheet_links, usable_tables, value_series
 
-PARSED_DIR = Path("data/parsed")
-PAGES_DIR = Path("data/wiki/pages")
-OUT_JSON = Path("data/wiki/index.json")
-OUT_MD = Path("data/wiki/INDEX.md")
+WORKBOOK = wiki_workbook()
+PARSED_DIR = wiki_parsed_dir()
+PAGES_DIR = wiki_pages_dir()
+OUT_JSON = wiki_index_json()
+OUT_MD = wiki_index_md()
 
 # The wiki index covers **only** sheets present in the canonical `_raw` workbook. Engine
 # sheets that live solely in the full `(Updated)` workbook (DCF, AUM Projection, the carry
@@ -253,7 +260,27 @@ def render_md(index: dict) -> str:
         "",
     ]
 
+    from .pdf_pages import SECTION as PDF_SECTION
+    documents = index.get("documents") or {}
+
     for section in sorted(tree):
+        # PDF/FDD section → two-layer per-deck index: a detailed document description (upper)
+        # + that deck's table of contents (lower), so the router picks the report, then the page.
+        if section == PDF_SECTION and documents:
+            out += [f"## {section} — 문서별", ""]
+            for doc in sorted(documents):
+                d = documents[doc]
+                out += [f"### 📄 {doc} — {d.get('title', doc)} ({d.get('n_pages', 0)}p)", ""]
+                if d.get("description"):
+                    out += [f"> {d['description']}", ""]
+                out += ["#### 목차", ""]
+                for t in d.get("toc", []):
+                    out.append(f"- **[[{t['page']}]]** — {t.get('title','')}")
+                    if t.get("summary"):
+                        out.append(f"  - {t['summary']}")
+                out.append("")
+            continue
+
         out += [f"## {section}", ""]
         for group in sorted(tree[section]):
             sheets = sorted(tree[section][group])

@@ -26,9 +26,9 @@ from .. import DATA_DIR, ROOT
 
 # named views: key -> (source json, output html, page title)
 VIEWS = {
-    "wiki": (DATA_DIR / "stella_semantic.json", ROOT / "frontend" / "web" / "graph.html",
+    "wiki": (DATA_DIR / "graph" / "stella_semantic.json", ROOT / "frontend" / "web" / "graph.html",
              "Semantic Graph (wiki-grounded · lift)"),
-    "curated": (DATA_DIR / "stella_graph.json", ROOT / "frontend" / "web" / "graph_curated.html",
+    "curated": (DATA_DIR / "graph" / "stella_graph.json", ROOT / "frontend" / "web" / "graph_curated.html",
                 "DCF Anchor Graph (curated · semantic)"),
 }
 

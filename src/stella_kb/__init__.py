@@ -16,12 +16,12 @@ DATA_DIR = ROOT / "data"
 # Fin.Model engine sheets (DCF, AUM Projection, ...) are not present in this file.
 # This is the canonical source for the **wiki** paradigm.
 WORKBOOK = str(
-    DATA_DIR / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated)_raw.xlsx"
+    DATA_DIR / "v0.1" / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated)_raw.xlsx"
 )
 
 # The full 63-sheet model, which DOES contain the Fin.Model engine sheets. The **graph**
 # paradigm (extract/semantic/metrics) and curated engine-only wiki pages read from here;
 # `_raw` is a strict subset, so this workbook covers everything `WORKBOOK` does too.
 FULL_WORKBOOK = str(
-    DATA_DIR / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated).xlsx"
+    DATA_DIR / "v0.1" / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated).xlsx"
 )

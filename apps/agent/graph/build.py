@@ -26,6 +26,7 @@ def _fanout(state: AgentState):
     """One ``solve`` branch per sub-question; the payload carries the branch's private work."""
     return [
         Send("solve", {"sub": p, "sub_idx": i, "index_md": state["index_md"],
+                       "wiki_dir": state.get("wiki_dir"),
                        "max_steps": state.get("max_steps", 8), "verbose": state.get("verbose")})
         for i, p in enumerate(state["plan"])
     ]

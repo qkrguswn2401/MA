@@ -37,7 +37,13 @@ header .logo {
 }
 header h1 { font-size: 15px; margin: 0; font-weight: 600; }
 header .sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
-.status { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+.dataset-picker { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dataset-picker select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 7px; padding: 4px 8px; font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.dataset-picker select:disabled { opacity: .55; cursor: not-allowed; }
+.status { margin-left: 16px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .dot.ok { background: var(--ok); }
 .dot.err { background: var(--err); }

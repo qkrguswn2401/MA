@@ -10,12 +10,15 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      host: "0.0.0.0",   // bind all interfaces (external/VESSL access), not just localhost
       port: 5173,
+      strictPort: true,   // fail fast if 5173 is taken rather than silently hopping ports
       proxy: {
-        // /ask, /ask/stream (SSE), /health, /info all live on the FastAPI backend
+        // /ask, /ask/stream (SSE), /health, /info, /datasets all live on the FastAPI backend
         "/ask": { target, changeOrigin: true },
         "/health": { target, changeOrigin: true },
         "/info": { target, changeOrigin: true },
+        "/datasets": { target, changeOrigin: true },
       },
     },
     build: { outDir: "dist" },

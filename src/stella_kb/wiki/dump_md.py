@@ -32,9 +32,10 @@ from pathlib import Path
 import openpyxl
 from openpyxl.utils import get_column_letter
 
-from .. import WORKBOOK
+from ..config import wiki_md_dir, wiki_workbook
 
-OUT_DIR = Path("data/md")
+WORKBOOK = wiki_workbook()
+OUT_DIR = wiki_md_dir()
 
 
 def _fmt(value: object) -> str:

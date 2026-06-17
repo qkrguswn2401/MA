@@ -206,6 +206,6 @@ if __name__ == "__main__":
     for w, u, v in top[-8:]:
         print(f"  {u} -> {v}  (x{w})")
 
-    out = str(DATA_DIR / "stella_graph.json")
+    out = str(DATA_DIR / "graph" / "stella_graph.json")
     export(sg, out)
     print(f"\nexported -> {out}")

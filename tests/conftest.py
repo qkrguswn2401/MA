@@ -15,8 +15,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX_JSON = ROOT / "data" / "wiki" / "index.json"
-FULL_WB = ROOT / "data" / "raw" / "Project Stella_Valuation Model_251103_vShared(Updated).xlsx"
+# Resolve the canonical wiki + workbook through config, so the suite follows the versioned
+# data layout (data/v0.1/...) instead of a hardcoded path.
+from src.stella_kb import FULL_WORKBOOK  # noqa: E402
+from src.stella_kb.config import agent_wiki_dir  # noqa: E402
+
+INDEX_JSON = agent_wiki_dir() / "index.json"
+FULL_WB = Path(FULL_WORKBOOK)
 
 
 def pytest_addoption(parser):

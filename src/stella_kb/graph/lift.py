@@ -33,8 +33,8 @@ from .. import DATA_DIR, WORKBOOK
 from .extract import build_dependency_graph
 from ..wiki.index import classify  # section/group/kind/case by sheet-name tokens
 
-PARSED_DIR = DATA_DIR / "parsed"
-OUT_JSON = DATA_DIR / "stella_semantic.json"
+PARSED_DIR = DATA_DIR / "v0.1" / "parsed"
+OUT_JSON = DATA_DIR / "graph" / "stella_semantic.json"
 
 _COL_ROW = re.compile(r"^([A-Z]+)(\d+)$")
 

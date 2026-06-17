@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import yaml
 
-from . import ROOT
+from . import ROOT, WORKBOOK
 
 _CONFIG_PATH = Path(os.environ.get("STELLA_CONFIG", str(ROOT / "config.yaml")))
 
@@ -110,6 +110,58 @@ def pdf_page_png_cache() -> str:
 
 def dart_mcp_url() -> str:
     return get("dart", "mcp_url", env="DART_MCP_URL", default="http://127.0.0.1:8002/sse")
+
+
+# --- wiki build I/O paths (env-overridable; defaults preserve the canonical data/ tree) -----
+# The whole wiki pipeline (dump_md -> parse_llm -> compile -> index -> pdf_pages) reads its
+# input workbook/PDFs and writes its md/parsed/wiki artifacts through these accessors, so a
+# second corpus can be built into an isolated tree without touching the canonical build:
+#     MNA_WIKI_WORKBOOK=<x.xlsx> MNA_WIKI_DATA=data/v0.2 MNA_WIKI_PDF_DIR=test_data/v0.2 \
+#         python -m src.stella_kb.wiki.dump_md --all   (and the rest of the stages)
+# Defaults reproduce the original hardcoded paths exactly, so existing runs/tests are unchanged.
+
+def wiki_workbook() -> str:
+    """Source workbook for the wiki Excel pipeline (dump_md/index)."""
+    return get("wiki", "workbook", env="MNA_WIKI_WORKBOOK", default=WORKBOOK)
+
+
+def wiki_data_dir() -> Path:
+    """Base dir holding the wiki build artifacts (``md/`` ``parsed/`` ``wiki/``). Default is the
+    canonical build under ``data/v0.1`` (each corpus version lives in its own ``data/<v>``)."""
+    return Path(get("wiki", "data_dir", env="MNA_WIKI_DATA", default="data/v0.1"))
+
+
+def wiki_pdf_dir() -> Path:
+    """Dir scanned for FDD report PDFs to ingest. Default: ``<data_dir>/raw``."""
+    return Path(get("wiki", "pdf_dir", env="MNA_WIKI_PDF_DIR",
+                    default=str(wiki_data_dir() / "raw")))
+
+
+def wiki_md_dir() -> Path:
+    return wiki_data_dir() / "md"
+
+
+def wiki_parsed_dir() -> Path:
+    return wiki_data_dir() / "parsed"
+
+
+def wiki_pages_dir() -> Path:
+    return wiki_data_dir() / "wiki" / "pages"
+
+
+def wiki_index_json() -> Path:
+    return wiki_data_dir() / "wiki" / "index.json"
+
+
+def wiki_index_md() -> Path:
+    return wiki_data_dir() / "wiki" / "INDEX.md"
+
+
+def agent_wiki_dir() -> Path:
+    """Wiki the query agent reads (index.json / pages / ledgers). Default ``data/wiki`` (the
+    canonical valuation-model wiki); point it at another build (e.g. ``data/v0.2/wiki``) to
+    serve or evaluate against a different corpus without touching the agent code."""
+    return Path(get("agent", "wiki_dir", env="MNA_AGENT_WIKI", default="data/v0.1/wiki"))
 
 
 if __name__ == "__main__":  # smoke: print the resolved config

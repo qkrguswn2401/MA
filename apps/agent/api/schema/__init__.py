@@ -5,18 +5,11 @@ Kept separate from the route handlers so the wire contract is in one place.
 
 from __future__ import annotations
 
-from typing import Literal
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class AskRequest(BaseModel):
-    question: str = Field(..., description="KO/EN question about the Centroid valuation or a public company.")
-    max_steps: int = Field(3, ge=1, le=20, description="Per-branch read budget (initial read + retries).")
-    include_trace: bool = Field(True, description="Return the routing trace.")
-    source: Literal["auto", "wiki", "dart"] = Field(
-        "auto", description="Backend: auto-route, 'wiki' (Centroid KB), or 'dart' (public co. via DART)."
-    )
+# Request inputs for /ask and /ask/stream are declared as explicit ``Query(...)`` params on the
+# route handlers (both endpoints are GET); only the response shape lives here as a model.
 
 
 class TraceStep(BaseModel):
@@ -32,7 +25,8 @@ class AskResponse(BaseModel):
     answer: str
     steps: int
     source: str = "wiki"  # which backend answered: wiki | dart
+    dataset: str | None = None  # which wiki dataset answered (None for the dart backend)
     trace: list[TraceStep] | None = None
 
 
-__all__ = ["AskRequest", "AskResponse", "TraceStep"]
+__all__ = ["AskResponse", "TraceStep"]

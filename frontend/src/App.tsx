@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { askStream, type TraceStep } from "./api";
 import StatusBadge from "./components/StatusBadge";
+import DatasetPicker from "./components/DatasetPicker";
 import Composer from "./components/Composer";
 import ChatMessage, { type ChatTurn } from "./components/ChatMessage";
 
@@ -15,6 +16,7 @@ export default function App() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dataset, setDataset] = useState("default"); // selected wiki version (?dataset=)
   const mainRef = useRef<HTMLElement>(null);
   const nextId = useRef(0);
 
@@ -54,9 +56,9 @@ export default function App() {
             t.status === "done" ? t : { ...t, text: detail, status: "error" },
           ),
         onDone: () => setBusy(false),
-      });
+      }, dataset);
     },
-    [busy],
+    [busy, dataset],
   );
 
   const submit = () => {
@@ -72,6 +74,7 @@ export default function App() {
           <h1>Project Stella</h1>
           <div className="sub">센트로이드 인베스트먼트 M&amp;A 밸류에이션 · 벡터리스 위키 에이전트</div>
         </div>
+        <DatasetPicker value={dataset} onChange={setDataset} disabled={busy} />
         <StatusBadge />
       </header>
 

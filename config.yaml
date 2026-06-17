@@ -31,3 +31,13 @@ cache:
 
 dart:
   mcp_url: http://127.0.0.1:8002/sse   # env: DART_MCP_URL  (non-secret; token stays in .env)
+
+agent:
+  wiki_dir: data/v0.1/wiki   # env: MNA_AGENT_WIKI  — the 'default' dataset the agent serves
+  # Named dataset (wiki version) registry: id -> built wiki dir (index.json + pages/ + ledgers/).
+  # The API selects one per request via the "dataset" payload param (a safe id, never a path).
+  # Each corpus version is self-contained under data/<version>/. Register a new one here after
+  # building it (run_pipeline.sh with MNA_WIKI_DATA=data/<version>).
+  datasets:
+    v0.1: data/v0.1/wiki   # canonical Centroid valuation-model wiki (63-sheet model)
+    v0.2: data/v0.2/wiki       # v0.2 test corpus: Excel ledgers + CAESAR/LIFE/STELLA FDD decks

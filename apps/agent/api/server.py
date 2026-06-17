@@ -21,6 +21,7 @@ import json
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -28,25 +29,43 @@ from fastapi.staticfiles import StaticFiles
 
 from src.stella_kb.llm import BASE_URL, MODEL
 
+from .. import datasets
 from ..core import answer, stream_run
-from ..io import INDEX_JSON, PAGES_DIR, load_index
-from .schema import AskRequest, AskResponse
+from .schema import AskResponse
 
 # the static chat frontend (single-file HTML fallback; React app lives in frontend/)
 # server.py = apps/agent/api/server.py -> parents[3] = repo root
 WEB_DIR = Path(__file__).resolve().parents[3] / "frontend" / "web"
 
-# index is loaded once and stashed here for every request to reuse
-_STATE: dict = {}
+
+def _resolve_store(dataset: str | None) -> datasets.WikiStore:
+    """Map a requested dataset id to its WikiStore, or raise the right HTTP error.
+
+    Unknown id → 422 (list the registered ids); known but not built → 503. Stores (and their
+    loaded indices) are cached, so this is cheap per request and lets concurrent requests
+    target different datasets safely (the dir is threaded through the agent, not a global)."""
+    try:
+        store = datasets.get_store(dataset)
+    except KeyError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown dataset {dataset!r}; available: {datasets.available()}")
+    if not store.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"dataset {store.dataset!r} not built: {store.index_json} missing")
+    return store
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not INDEX_JSON.exists():
-        raise RuntimeError(f"{INDEX_JSON} missing — build the wiki first (run_pipeline.sh)")
-    _STATE["index"] = load_index()
+    # Validate the default dataset is built; per-request datasets are resolved + cached lazily.
+    default = datasets.get_store(None)
+    if not default.exists():
+        raise RuntimeError(
+            f"{default.index_json} missing — build the wiki first (run_pipeline.sh)")
+    default.index  # warm the default index cache
     yield
-    _STATE.clear()
 
 
 app = FastAPI(
@@ -68,58 +87,88 @@ def _vllm_up() -> bool:
 @app.get("/health")
 def health() -> dict:
     """Liveness + dependency check: wiki artifacts present and the vLLM reachable."""
-    n_pages = len(list(PAGES_DIR.glob("*.md"))) if PAGES_DIR.exists() else 0
+    default = datasets.get_store(None)
+    pages_dir = default.wiki_dir / "pages"
+    n_pages = len(list(pages_dir.glob("*.md"))) if pages_dir.exists() else 0
     llm_ok = _vllm_up()
     return {
         "status": "ok" if (n_pages and llm_ok) else "degraded",
+        "default_dataset": default.dataset,
         "wiki_pages": n_pages,
-        "index_loaded": "index" in _STATE,
+        "datasets": _dataset_status(),
         "llm": {"url": BASE_URL, "model": MODEL, "reachable": llm_ok},
     }
 
 
-@app.post("/ask", response_model=AskResponse)
-def ask_endpoint(req: AskRequest) -> AskResponse:
+def _dataset_status() -> dict:
+    """``{id: built?}`` over every registered dataset — for /health and /datasets."""
+    return {ds: datasets.WikiStore(ds).exists() for ds in datasets.available()}
+
+
+@app.get("/datasets")
+def list_datasets() -> dict:
+    """Registered wiki datasets (versions) selectable via the ``dataset`` payload param,
+    and whether each is built. Pass one of the ``built`` ids as ``dataset`` to /ask."""
+    return {"default": datasets.DEFAULT, "datasets": _dataset_status()}
+
+
+@app.get("/ask", response_model=AskResponse)
+def ask_endpoint(
+    question: str = Query(..., description="KO/EN question about the Centroid valuation or a public company."),
+    max_steps: int = Query(3, ge=1, le=20, description="Per-branch read budget (initial read + retries)."),
+    source: Literal["auto", "wiki", "dart"] = Query(
+        "auto", description="Backend: auto-route, 'wiki' (Centroid KB), or 'dart' (public co. via DART)."),
+    include_trace: bool = Query(True, description="Return the routing trace."),
+    dataset: str | None = Query(
+        None, description="Wiki dataset/version id (e.g. 'v0.2'); omit for the default. See GET /datasets."),
+) -> AskResponse:
     """Answer one question, routing to the wiki (Centroid) or DART (public co.) backend.
 
-    ``source`` selects the backend: ``auto`` (route via the LLM), ``wiki``, or ``dart``.
-    Returns the answer, which backend served it, and the routing trace."""
-    if not req.question.strip():
+    Inputs are query parameters (same shape as ``/ask/stream``). ``source`` selects the backend:
+    ``auto`` (route via the LLM), ``wiki``, or ``dart``. Returns the answer, which backend served
+    it, the dataset queried, and the routing trace."""
+    if not question.strip():
         raise HTTPException(status_code=422, detail="question must not be empty")
     # auto/wiki need the guest vLLM (routing + wiki retrieval run on it); dart uses its own
     # endpoints (the tool LLM on :8001 + the DART MCP server) and degrades to an error answer.
-    if req.source != "dart" and not _vllm_up():
+    if source != "dart" and not _vllm_up():
         raise HTTPException(status_code=503, detail=f"LLM endpoint {BASE_URL} unreachable")
-    result = answer(req.question, source=req.source, max_steps=req.max_steps,
-                    index=_STATE.get("index"))
+    # The dart backend has no wiki, so only resolve a dataset for wiki/auto requests.
+    store = None if source == "dart" else _resolve_store(dataset)
+    result = answer(question, source=source, max_steps=max_steps, store=store)
     return AskResponse(
-        question=req.question,
+        question=question,
         answer=result["answer"],
         steps=result["steps"],
         source=result["source"],
-        trace=result["trace"] if req.include_trace else None,
+        dataset=(store.dataset if store is not None else None),
+        trace=result["trace"] if include_trace else None,
     )
 
 
 @app.get("/ask/stream")
 def ask_stream(
     question: str = Query(..., description="KO/EN question about the valuation."),
-    max_steps: int = Query(3, ge=1, le=20),
+    max_steps: int = Query(3, ge=1, le=20, description="Per-branch read budget (initial read + retries)."),
+    dataset: str | None = Query(None, description="Wiki dataset/version id (e.g. 'v0.2'); "
+                                                  "omit for the default. See GET /datasets."),
 ) -> StreamingResponse:
     """Stream the agent's routing live as Server-Sent Events.
 
-    Emits one ``step`` event per agent decision (which page it opens and why), a final
-    ``answer`` event, then ``done``. Consume with an EventSource (browser) or
+    Inputs are query parameters (the browser drives this with ``EventSource``, which is GET-only
+    and can't send a body). Emits one ``step`` event per agent decision (which page it opens and
+    why), a final ``answer`` event, then ``done``. Consume with an EventSource (browser) or
     ``curl -N localhost:8000/ask/stream?question=...``.
     """
     if not question.strip():
         raise HTTPException(status_code=422, detail="question must not be empty")
     if not _vllm_up():
         raise HTTPException(status_code=503, detail=f"LLM endpoint {BASE_URL} unreachable")
+    store = _resolve_store(dataset)
 
     def gen():
         try:
-            for ev in stream_run(question, max_steps=max_steps, index=_STATE.get("index")):
+            for ev in stream_run(question, max_steps=max_steps, store=store):
                 etype = ev.pop("type")
                 yield f"event: {etype}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
             yield "event: done\ndata: {}\n\n"
@@ -144,7 +193,7 @@ def info() -> dict:
         "service": "stella-wiki-agent",
         "ui": "/",
         "docs": "/docs",
-        "endpoints": ["/health", "/ask (POST)", "/ask/stream (GET, SSE)"],
+        "endpoints": ["/health", "/datasets", "/ask (GET)", "/ask/stream (GET, SSE)"],
     }
 
 

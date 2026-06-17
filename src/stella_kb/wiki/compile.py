@@ -34,13 +34,16 @@ from pathlib import Path
 import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
 
-from .. import WORKBOOK, config
+from .. import config
 from ..graph.extract import build_dependency_graph
 from ..llm import chat
 from ..prompts import load as load_prompt
 
-PARSED_DIR = Path("data/parsed")
-OUT_DIR = Path("data/wiki/pages")
+from ..config import wiki_pages_dir, wiki_parsed_dir, wiki_workbook
+
+WORKBOOK = wiki_workbook()
+PARSED_DIR = wiki_parsed_dir()
+OUT_DIR = wiki_pages_dir()
 
 
 # --------------------------------------------------------------------------- helpers

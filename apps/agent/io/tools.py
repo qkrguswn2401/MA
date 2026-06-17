@@ -12,7 +12,9 @@ import json
 import re
 from pathlib import Path
 
-WIKI_DIR = Path("data/wiki")
+from src.stella_kb.config import agent_wiki_dir
+
+WIKI_DIR = agent_wiki_dir()          # env MNA_AGENT_WIKI overrides (default data/wiki)
 INDEX_MD = WIKI_DIR / "INDEX.md"
 INDEX_JSON = WIKI_DIR / "index.json"
 PAGES_DIR = WIKI_DIR / "pages"
@@ -105,9 +107,13 @@ def trace_links(index: dict, start: str, direction: str = "down",
     return chain
 
 
-def open_page(name: str) -> str:
-    """Return a page's markdown (frontmatter trimmed to the essentials to save context)."""
-    path = PAGES_DIR / f"{name}.md"
+def open_page(name: str, wiki_dir: str | Path | None = None) -> str:
+    """Return a page's markdown (frontmatter trimmed to the essentials to save context).
+
+    ``wiki_dir`` overrides the default wiki per call (the API threads the per-request dataset's
+    dir here); ``None`` uses the process default ``PAGES_DIR``."""
+    pages = (Path(wiki_dir) / "pages") if wiki_dir else PAGES_DIR
+    path = pages / f"{name}.md"
     if not path.exists():
         return (f"OPEN {name!r} → no such page. Use the EXACT page name from the INDEX "
                 "(it is the wikilink text).")
@@ -120,7 +126,8 @@ def open_page(name: str) -> str:
     return f"OPEN {name!r}:\n{text}"
 
 
-def query_ledger(page: str, keywords: list[str], ask: str = "", cap: int = 10) -> list[dict]:
+def query_ledger(page: str, keywords: list[str], ask: str = "", cap: int = 10,
+                 wiki_dir: str | Path | None = None) -> list[dict]:
     """Deterministic filter+sum over a ``*_거래내역`` ledger sidecar → evidence items.
 
     Transaction ledgers are dropped by the time-series parse (rows aren't on the wiki page), so
@@ -132,7 +139,8 @@ def query_ledger(page: str, keywords: list[str], ask: str = "", cap: int = 10) -
     or no usable keywords."""
     from src.stella_kb.wiki.ledger import query_ledger_rows
 
-    path = LEDGERS_DIR / f"{page}.json"
+    ledgers = (Path(wiki_dir) / "ledgers") if wiki_dir else LEDGERS_DIR
+    path = ledgers / f"{page}.json"
     kws = [str(k) for k in (keywords or []) if k and len(str(k)) >= 2]
     if not path.exists() or not kws:
         return []

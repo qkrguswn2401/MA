@@ -20,7 +20,7 @@ from .. import llm
 from ..prompts import load as load_prompt
 from .ids import name_of
 
-GRAPH_PATH = str(DATA_DIR / "stella_graph.json")
+GRAPH_PATH = str(DATA_DIR / "graph" / "stella_graph.json")
 
 
 # --- load ------------------------------------------------------------------------------

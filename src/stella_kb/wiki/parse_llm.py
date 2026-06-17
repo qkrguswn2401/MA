@@ -36,12 +36,16 @@ from pathlib import Path
 import openpyxl
 from openpyxl.utils import column_index_from_string
 
-from .. import WORKBOOK, config
+from .. import config
 from ..llm import chat
 from ..prompts import load as load_prompt
 
-MD_DIR = Path("data/md")
-OUT_DIR = Path("data/parsed")
+from ..config import wiki_md_dir, wiki_parsed_dir, wiki_workbook
+
+WORKBOOK = wiki_workbook()
+
+MD_DIR = wiki_md_dir()
+OUT_DIR = wiki_parsed_dir()
 
 _CELL = re.compile(r"^([A-Z]{1,3})(\d+)$")
 

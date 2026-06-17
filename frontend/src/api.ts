@@ -22,6 +22,18 @@ export async function getHealth(): Promise<Health> {
   return r.json();
 }
 
+export interface DatasetsInfo {
+  default: string; // the default dataset id
+  datasets: Record<string, boolean>; // id -> built?
+}
+
+// Registered wiki datasets (versions) and whether each is built. Feeds the version picker.
+export async function getDatasets(): Promise<DatasetsInfo> {
+  const r = await fetch("/datasets");
+  if (!r.ok) throw new Error(`datasets ${r.status}`);
+  return r.json();
+}
+
 export interface StreamHandlers {
   onStep?: (s: TraceStep) => void;
   onAnswer?: (answer: string, steps: number) => void;
@@ -41,8 +53,10 @@ export function askStream(
   question: string,
   maxSteps: number,
   h: StreamHandlers,
+  dataset?: string,
 ): () => void {
-  const url = `/ask/stream?question=${encodeURIComponent(question)}&max_steps=${maxSteps}`;
+  let url = `/ask/stream?question=${encodeURIComponent(question)}&max_steps=${maxSteps}`;
+  if (dataset) url += `&dataset=${encodeURIComponent(dataset)}`;
   const es = new EventSource(url);
 
   es.addEventListener("step", (e) => {
