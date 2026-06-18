@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from src.stella_kb.config import agent_wiki_dir
@@ -24,6 +25,63 @@ LEDGERS_DIR = WIKI_DIR / "ledgers"   # per-fund 거래내역 row sidecars (src/s
 def load_index() -> dict:
     """The machine-readable index: ``{tree, pages, alias_index}``."""
     return json.loads(INDEX_JSON.read_text(encoding="utf-8"))
+
+
+# --- curated routing table (routes.yaml) — deterministic term→page, skips the router LLM ----
+
+@lru_cache(maxsize=8)
+def _load_routes_cached(path: str, _mtime: float) -> dict:
+    """Parse ``routes.yaml`` → ``{normalized_term: [page, ...]}``. Cached by (path, mtime) so an
+    edit is picked up live but the file isn't re-read on every sub-question. Tolerant of an
+    empty/malformed file (→ ``{}``) so a bad table never breaks routing — it just falls back to
+    the LLM router."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 — a broken table must degrade to the LLM router, not crash
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for k, v in data.items():
+        pages = v if isinstance(v, list) else [v]
+        out[_norm(str(k))] = [str(p) for p in pages if p]
+    return out
+
+
+def load_routes(wiki_dir: str | Path | None = None) -> dict:
+    """Load the per-dataset curated routing table (``curation/<version>/routes.yaml``, resolved
+    from ``wiki_dir`` by ``config.agent_routes_yaml``); ``{}`` if absent.
+
+    Per-request ``wiki_dir`` (concurrency-safe — never a global), default the process wiki."""
+    from src.stella_kb.config import agent_routes_yaml
+
+    path = agent_routes_yaml(wiki_dir)
+    if not path.exists():
+        return {}
+    return _load_routes_cached(str(path), path.stat().st_mtime)
+
+
+def route_lookup(hint_terms: list[str], index: dict,
+                 wiki_dir: str | Path | None = None) -> list[str]:
+    """Deterministic curated routing: a sub-question's hint terms → pages, via ``routes.yaml``.
+
+    A hit lets the agent skip the router LLM entirely (the latency win). Returns validated,
+    order-preserving, deduped page names — only those that actually exist in ``index['pages']``
+    (a stale curated target is silently dropped). Empty when there's no table or no term hits,
+    in which case the caller falls back to the LLM router."""
+    routes = load_routes(wiki_dir)
+    if not routes:
+        return []
+    valid = index.get("pages", {})
+    picks, seen = [], set()
+    for t in (hint_terms or []):
+        for p in routes.get(_norm(str(t)), []):
+            if p in valid and p not in seen:
+                seen.add(p)
+                picks.append(p)
+    return picks
 
 
 def _norm(term: str) -> str:
@@ -124,6 +182,55 @@ def open_page(name: str, wiki_dir: str | Path | None = None) -> str:
         kept = [ln for ln in fm.splitlines() if not ln.startswith("aliases:")]
         text = "\n".join(kept) + "\n---\n" + body
     return f"OPEN {name!r}:\n{text}"
+
+
+_CELL_VAL = re.compile(r"^\s*(.+?)\s*\[([^\]\s]+)\]\s*$")  # "46328767 [D6]" / "3.70% [FDD8]"
+
+
+def extract_page_items(page_md: str, hint_terms: list[str] | None = None,
+                       cap: int = 60) -> list[dict]:
+    """Deterministically pull value-bearing rows from a wiki page's markdown table(s).
+
+    The compile step renders every page fact as ``value [cell]`` in a pipe table with a header
+    row (period columns for Excel time-series, a single ``value`` column for PDF figures). This
+    parses those cells into ``[{term, period, value, cell}]`` — no LLM, exact cell provenance —
+    so the retriever can skip its per-page LLM call for pages that are already structured (the
+    same "code does retrieval" win as the ledger sidecar, but for ordinary tables).
+
+    ``hint_terms`` (optional) keeps only rows whose label matches a hint (normalized substring);
+    omitted → every row. Empty list when the page has no parseable ``value [cell]`` table (e.g.
+    a prose-only page), so the caller falls back to the LLM extractor. ``cap`` bounds the rows.
+    """
+    hints = [_norm(h) for h in (hint_terms or []) if h]
+    out: list[dict] = []
+    header: list[str] = []
+    for line in page_md.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            header = []  # table ended; reset so a later table re-detects its own header
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if cells and all(c and set(c) <= {"-", ":"} for c in cells):  # the |---|---| separator
+            continue
+        if not header:  # first pipe row of a block is its header
+            header = cells
+            continue
+        label = cells[0].strip(" *`")
+        if not label or (hints and not any(h in _norm(label) for h in hints)):
+            continue
+        for ci, cell in enumerate(cells[1:], start=1):
+            m = _CELL_VAL.match(cell)
+            if not m:  # not a "value [ref]" cell (label/role/blank columns)
+                continue
+            value, ref = m.group(1).strip(), m.group(2)
+            if not value:
+                continue
+            hdr = header[ci] if ci < len(header) else ""
+            period = hdr if re.match(r"^(FY)?\s*\d{4}", hdr) else ""
+            out.append({"term": label, "period": period, "value": value, "cell": ref})
+            if len(out) >= cap:
+                return out
+    return out
 
 
 def query_ledger(page: str, keywords: list[str], ask: str = "", cap: int = 10,

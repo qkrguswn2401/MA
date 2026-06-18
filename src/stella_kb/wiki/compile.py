@@ -36,10 +36,10 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .. import config
 from ..graph.extract import build_dependency_graph
-from ..llm import chat
+from ..llm import cached_chat
 from ..prompts import load as load_prompt
 
-from ..config import wiki_pages_dir, wiki_parsed_dir, wiki_workbook
+from ..config import wiki_pages_dir, wiki_parsed_dir, wiki_prose_cache, wiki_workbook
 
 WORKBOOK = wiki_workbook()
 PARSED_DIR = wiki_parsed_dir()
@@ -298,8 +298,11 @@ def _prose(sheet: str, meta: dict, facts: list[str]) -> str:
             f"{ctx}\n"
             f"Facts:\n{body}\n\nSummary:")
     try:
-        return chat([{"role": "system", "content": _PROSE_SYS},
-                     {"role": "user", "content": user}], max_tokens=300).strip()
+        # Cached on the facts handed to the model: a page whose values are unchanged reuses its
+        # prose (free + deterministic); a changed page misses and rewrites. Incremental win.
+        return cached_chat([{"role": "system", "content": _PROSE_SYS},
+                            {"role": "user", "content": user}],
+                           cache_dir=wiki_prose_cache(), max_tokens=300).strip()
     except Exception as e:  # noqa: BLE001 — prose is best-effort; scaffold still stands
         return f"_(prose unavailable: {type(e).__name__})_"
 

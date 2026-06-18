@@ -1,0 +1,29 @@
+# Curated first-layer deck index for the v0.1 corpus (the Stella FDD Executive Summary PDF that
+# accompanies the canonical 63-sheet Centroid valuation model).
+#
+# Read at BUILD time, per dataset version: curation/<version>/decks.yaml (committed; env
+# MNA_WIKI_DECKS overrides with an explicit file). The PDF build (src/stella_kb/wiki/pdf_pages.py
+# :: build_document) reads this to OVERRIDE the LLM-synthesized document node. Precedence per
+# field: curated (here) > LLM > default. Pin both title and description and the LLM call is
+# skipped entirely (fully deterministic). Build-time quality/determinism — orthogonal to
+# routes.yaml (the query-time latency shortcut).
+#
+# Key = deck id = PDF stem minus a trailing _pages/-pages. v0.1 is a SINGLE-PDF build, so the
+# stem has no _pages suffix and the key is the full stem (Stella_FDD_ExecSummary_p4-17.pdf ->
+# Stella_FDD_ExecSummary_p4-17). Rename the PDF and this key must change to match.
+
+Stella_FDD_ExecSummary_p4-17:
+  title: Project Stella — 센트로이드 인베스트먼트파트너스 FDD Executive Summary
+  description: |
+    본 보고서는 Buyout 전문 투자사인 센트로이드 인베스트먼트파트너스에 대한 재무 실사(FDD)
+    Executive Summary로, 대상회사의 개요·지배구조·펀드 성과·재무 현황과 주요 발견사항(Key
+    Findings)을 요약합니다. 대상회사는 2015년 설립되었으며 정진혁 대표(64.999%)와 신창호
+    주주(35.000%)가 주요 주주이고, 100% 종속회사인 센트로이드 매니지먼트와 8개 PEF를 통해
+    투자를 집행하며 각 펀드 하위 SPC로 투자대상을 관리합니다. 운용 펀드 전체 기준 IRR 18.7%,
+    MOIC 3.8x를 기록하고 있으며, 영업수익은 FY20~FY23 연평균 82.9% 성장하고 그중 관리수수료가
+    평균 96.7%를 차지합니다. '24년 6월말 기준 Adjusted NAV는 회수가능성이 낮은 대여금·미수수익·
+    특허권 등 6,674백만원을 차감해 4,462백만원으로 산출되었습니다. 주요 발견사항으로는 펀드별
+    이슈(제1호차이나PEF의 피투자회사 분쟁, 제3호그로쓰PEF의 파산 손상, 제5호PEF의 인허가 지연,
+    제8호코인베스트PEF의 높은 예상 수익률), 재무자료와 원장 간 금액 불일치 등 관리 미비,
+    중소기업특례 적용에 따른 회계처리(매도가능증권 원가법) 이슈, 그리고 특수관계자 대상 대여금
+    현황이 구체적으로 명시되어 있습니다.

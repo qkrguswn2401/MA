@@ -82,6 +82,22 @@ def agent_fanout() -> int:
     return get("concurrency", "fanout", env="STELLA_FANOUT", default=4, cast=int)
 
 
+def agent_router_top_k() -> int:
+    """Max pages the router opens for ONE sub-question in a single round. Opening several related
+    pages at once (reads fan out in parallel) is cheaper than picking one and paying for a serial
+    ``gap``→retry round, so this is the recall/latency knob. Default 3 keeps prior behavior."""
+    return get("agent", "router_top_k", env="MNA_ROUTER_TOPK", default=3, cast=int)
+
+
+def agent_deterministic_retrieve() -> bool:
+    """When true, the retriever first tries a **deterministic** parse of a page's ``value [cell]``
+    table (``io.tools.extract_page_items``) and, on a hit, skips that page's LLM extraction — a
+    latency win for already-structured pages. Pages with no parseable table fall back to the LLM.
+    Default **off** — it changes evidence selection, so enable only after a clean quality A/B."""
+    return get("agent", "deterministic_retrieve", env="MNA_DET_RETRIEVE",
+               default=False, cast=lambda v: str(v).lower() in ("1", "true", "yes", "on"))
+
+
 def eval_fanout(default: int = 8) -> int:
     return get("concurrency", "eval_fanout", env="STELLA_EVAL_FANOUT", default=default, cast=int)
 
@@ -114,6 +130,24 @@ def pdf_structure_cache() -> str:
     return get("cache", "pdf_structure", env="PDF_STRUCTURE_CACHE", default=".cache/pdf_structure")
 
 
+def wiki_parse_cache() -> str:
+    """Disk cache for the wiki *parse* LLM calls (``parse_llm``: a sheet's grid → structure).
+
+    Content-addressed (the key is the model + full prompt, i.e. the grid), so it doubles as the
+    **incremental** mechanism: an unchanged sheet hashes to the same key → cache hit → no LLM
+    call, while an edited sheet misses and re-parses. Also makes a rebuild deterministic (the
+    shared vLLM is non-deterministic even at temp 0). Clear the dir to force a fresh parse."""
+    return get("cache", "wiki_parse", env="WIKI_PARSE_CACHE", default=".cache/wiki_parse")
+
+
+def wiki_prose_cache() -> str:
+    """Disk cache for the wiki *compile* prose LLM calls (the page's 'What this is' blurb).
+
+    Same content-addressed/incremental rationale as :func:`wiki_parse_cache`: keyed on the
+    facts handed to the model, so a page whose values are unchanged reuses its prose for free."""
+    return get("cache", "wiki_prose", env="WIKI_PROSE_CACHE", default=".cache/wiki_prose")
+
+
 def dart_mcp_url() -> str:
     return get("dart", "mcp_url", env="DART_MCP_URL", default="http://127.0.0.1:8002/sse")
 
@@ -143,6 +177,33 @@ def wiki_pdf_dir() -> Path:
                     default=str(wiki_data_dir() / "raw")))
 
 
+def curation_dir() -> Path:
+    """Repo-tracked root for hand-authored, **version-controlled** curation, laid out per dataset
+    version: ``curation/<version>/{decks,routes}.yaml``. Lives outside ``data/``/``test_data/``
+    (both gitignored), so a fresh checkout has the curation — unlike the regenerable build tree.
+    Override the root with env ``MNA_CURATION_DIR`` / yaml ``curation.dir``."""
+    return Path(get("curation", "dir", env="MNA_CURATION_DIR", default=str(ROOT / "curation")))
+
+
+def _version_token(d: Path | str) -> str:
+    """Dataset-version token from a data/wiki dir, per the ``data/<version>/wiki`` convention:
+    ``data/v0.2`` → ``v0.2`` and ``data/v0.2/wiki`` → ``v0.2``. Names the ``curation/<version>/``
+    subdir that pairs with the build/dataset."""
+    p = Path(d)
+    return p.parent.name if p.name == "wiki" else p.name
+
+
+def wiki_decks_yaml() -> Path:
+    """Curated **first-layer** deck index the PDF build reads to override the LLM-synthesized
+    document node (per-deck ``title``/``description``). A hand-authored, git-committed input —
+    precedence is curated > LLM > default — so the upper layer is deterministic and auditable
+    (OpenKB curated-whitelist pattern). Default ``curation/<version>/decks.yaml`` (version from
+    the build's ``MNA_WIKI_DATA`` dir); explicit file via env ``MNA_WIKI_DECKS``; absent = pure
+    LLM."""
+    return Path(get("wiki", "decks", env="MNA_WIKI_DECKS",
+                    default=str(curation_dir() / _version_token(wiki_data_dir()) / "decks.yaml")))
+
+
 def wiki_md_dir() -> Path:
     return wiki_data_dir() / "md"
 
@@ -168,6 +229,17 @@ def agent_wiki_dir() -> Path:
     canonical valuation-model wiki); point it at another build (e.g. ``data/v0.2/wiki``) to
     serve or evaluate against a different corpus without touching the agent code."""
     return Path(get("agent", "wiki_dir", env="MNA_AGENT_WIKI", default="data/v0.1/wiki"))
+
+
+def agent_routes_yaml(wiki_dir: str | Path | None = None) -> Path:
+    """Curated routing table for the query agent — ``term → page(s)`` so a hit skips the router
+    LLM. Resolved **per dataset**: ``curation/<version>/routes.yaml`` (version from the served
+    ``wiki_dir``, default the process wiki). Committed alongside ``decks.yaml``. An explicit env
+    ``MNA_AGENT_ROUTES`` file overrides for single-dataset serving (don't set it when serving
+    several datasets — it would force one table for all). Absent = pure-LLM routing."""
+    base = Path(wiki_dir) if wiki_dir else agent_wiki_dir()
+    return Path(get("agent", "routes", env="MNA_AGENT_ROUTES",
+                    default=str(curation_dir() / _version_token(base) / "routes.yaml")))
 
 
 if __name__ == "__main__":  # smoke: print the resolved config

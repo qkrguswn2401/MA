@@ -1,0 +1,40 @@
+# Curated routing table for the v0.1 dataset (canonical 63-sheet Centroid valuation model +
+# the Stella FDD ExecSummary). The LATENCY shortcut — see curation/v0.2/routes.yaml for the
+# full contract. Read at QUERY time by apps/agent/io/tools.py :: route_lookup.
+#
+# Format:  <hint term>: [<exact page name>, ...]  (bare string = one page). Keys match a
+# sub-question's hint_terms by EXACT normalized term (not substring), so only add terms unique
+# to one page. A miss falls back to the LLM router; this table is purely additive.
+
+# --- DCF — dual case (opens the MGT and DTT exhibits together: the canonical compare) ---
+# NOTE: page names contain '#', which starts a YAML comment when unquoted — keep these quoted.
+DCF:
+  - "DCF 장표 #1_MGT"
+  - "DCF 장표 #2_DTT"
+MGT Case: "DCF 장표 #1_MGT"
+경영진: "DCF 장표 #1_MGT"
+DTT Case: "DCF 장표 #2_DTT"
+딜로이트: "DCF 장표 #2_DTT"
+
+# --- valuation / cashflow exhibits (each a unique page) ---
+Football Chart: Football Chart
+풋볼차트: Football Chart
+Bridge: Bridge
+NWC: NWC 장표
+순운전자본: NWC 장표
+CapEx: CapEx 장표
+자본적지출: CapEx 장표
+IRR: IRR
+GP Commitment: GP Commitment 장표
+
+# --- macro assumptions (both regions) ---
+EIU:
+  - EIU(KR)
+  - EIU(US)
+
+# --- Stella FDD ExecSummary pages (unique) ---
+Company Snapshot: FDD1 — Company Snapshot
+Group Structure: FDD3 — Group Structure
+지배구조: FDD3 — Group Structure
+특수관계자: FDD14 — Related Party Transaction
+Related Party Transaction: FDD14 — Related Party Transaction

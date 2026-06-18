@@ -37,10 +37,10 @@ import openpyxl
 from openpyxl.utils import column_index_from_string
 
 from .. import config
-from ..llm import chat
+from ..llm import cached_chat
 from ..prompts import load as load_prompt
 
-from ..config import wiki_md_dir, wiki_parsed_dir, wiki_workbook
+from ..config import wiki_md_dir, wiki_parse_cache, wiki_parsed_dir, wiki_workbook
 
 WORKBOOK = wiki_workbook()
 
@@ -232,10 +232,12 @@ def parse_sheet(sheet: str, timeout: float = 600.0) -> dict:
         raise FileNotFoundError(f"{md_path} — run `python -m src.stella_kb.wiki.dump_md` first")
     grid = _values_grid(md_path.read_text(encoding="utf-8"))
 
-    raw = chat(
+    # Cached on (model, prompt): an unchanged grid is a hit (free + deterministic); an edited
+    # sheet misses and re-parses. This is the incremental + reproducibility win for the stage.
+    raw = cached_chat(
         [{"role": "system", "content": _SYSTEM},
          {"role": "user", "content": f"Worksheet: {sheet!r}\n\n{grid}\n\nJSON:"}],
-        max_tokens=8192, timeout=timeout,
+        cache_dir=wiki_parse_cache(), max_tokens=8192, timeout=timeout,
     )
     parsed = _json_from(raw)
     if parsed is None:

@@ -1,0 +1,37 @@
+# Curated first-layer deck index for the v0.2 FDD corpus.
+#
+# The PDF build (src/stella_kb/wiki/pdf_pages.py :: build_document) reads this to OVERRIDE the
+# LLM-synthesized document node. Precedence per field: curated (here) > LLM > default.
+# Pin both title and description for a deck and its LLM call is skipped entirely
+# (fully deterministic). Omit a field to let the LLM fill just that one. Delete a deck
+# block (or this whole file) to fall back to pure-LLM generation.
+#
+# Keys = deck id (PDF stem minus _pages: CAESAR_pages.pdf -> CAESAR). The per-page ToC
+# (lower layer) is always derived from the pages and is not configured here.
+# Read at BUILD time, per dataset version: curation/<version>/decks.yaml (committed; env
+# MNA_WIKI_DECKS overrides with an explicit file). Build-time quality/determinism — orthogonal
+# to routes.yaml (which is the query-time latency shortcut).
+
+CAESAR:
+  description: 본 보고서는 중소형 사모펀드 운용사인 Celadon Partners LLC의 기업가치 평가 및 재무 실사를 위해 작성되었습니다. 보고서는 대상회사의 일반 현황,
+    Tang Family를 정점으로 하는 복잡한 지배구조 및 SPV 체계, 그리고 10개 포트폴리오의 투자 성과(Fund 1 MOIC 2.8x, SPVs MOIC 1.7x)를 상세히
+    다룹니다. 수익 구조 측면에서는 자체 펀드 및 개별 SPV로부터 수취하는 Manager Fee의 인식 현황과 FVTPL 처리 내역을 분석하고 있습니다. 밸류에이션 섹션에서는 WACC(13.8%)
+    산출 근거와 함께 MGT Case(USD 282m~360m)와 DTT Base Case(USD 101m~127m)의 기업가치 추정치를 비교 제시합니다. 특히 Management
+    Case와 Deloitte Case 간의 현저한 가치 차이를 보여주는 KPI 비교표와 WACC 산출 내역, 지배구조도 등의 시각 자료가 포함되어 있어, 투자 구조 및 가치 산정의
+    적정성을 판단하는 데 핵심적인 자료입니다.
+  title: Project CAESAR Valuation & Financial Due Diligence Report
+LIFE:
+  description: 본 보고서는 국내 생명보험 시장 진입을 위한 KDB생명보험의 인수 기회와 사업 경쟁력 강화 방안을 다루는 M&A 분석 문서입니다. KDB생명의 총자산(17.2조원)
+    및 순자산(4,090억원) 등 전반적인 회사 개요와 조직 구조, 그리고 보장성 보험 중심의 사업 영역 현황과 CSM(보험계약마진) 추이를 상세히 분석하고 있습니다. 특히 전속채널
+    리빌딩과 AI 기반 DB 마케팅을 통한 영업 고도화 전략을 제시하며, 가동 설계사 1,000명 확보 및 신규 설계사 생산성 향상 목표치와 같은 구체적인 KPI를 포함하고 있습니다.
+    또한, 타 생보사(우리아비바, 동양, 현대라이프, PCA생명)의 PBR 및 Deal Value 비교 데이터와 국내 생보사 시장 점유율 분석을 통해 딜의 희소성과 가치를 평가합니다.
+    재무적으로는 기업대출 비중(약 97%) 및 잔액 추이, 사업비율, 보험계약유지율 등 핵심 경영지표와 대출채권 세부 내역이 표와 수치 형태로 수록되어 있습니다.
+  title: 'Project LIFE: KDB생명보험 인수 및 사업전략 분석 보고서'
+STELLA:
+  description: 본 보고서는 Buyout 중심의 투자사인 센트로이드 인베스트먼트파트너스의 기업가치 평가 및 재무 실사(FDD) 내용을 담고 있습니다. 보고서는 대상회사의 지배구조,
+    8개 운용 펀드의 성과(평균 IRR 18.7%, MOIC 3.8x), 주요 출자자(LP) 현황 및 재무 상태를 상세히 분석합니다. 특히 밸류에이션 섹션에서는 DCF와 Market
+    Approach(GPC, GTC)를 활용하여 지분가치를 산출하였으며, 경영진 가정(Management Case)과 딜로이트 가정(Deloitte Case) 간의 신규 펀드 규모
+    및 Exit Value 추정치 차이를 심층 비교 분석하였습니다. 주요 시각 자료로는 펀드별 투자 구조도, DCF 민감도 매트릭스(WACC 및 PGR 변동에 따른 가치 변화),
+    국내 PE업계 거래 사례 기반의 Multiple 비교표, 그리고 Adjusted NAV 산출 표 등이 포함되어 있습니다. 딜로이트 Case 기준 대상회사의 지분가치는 약 856억원으로
+    추정되었으며, 관리수수료 중심의 수익 구조와 특수관계자 간 대여금 등 재무적 조정 사항이 구체적으로 명시되어 있습니다.
+  title: 'Project Stella: 센트로이드 인베스트먼트파트너스 FDD 및 Valuation 보고서'

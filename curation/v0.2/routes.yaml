@@ -1,0 +1,56 @@
+# Curated routing table for the v0.2 dataset — the LATENCY shortcut.
+#
+# Read at QUERY time by the agent (apps/agent/io/tools.py :: route_lookup), per dataset version:
+# curation/<version>/routes.yaml (committed; env MNA_AGENT_ROUTES overrides with an explicit
+# file). When a sub-question's hint_terms hit a key here, the agent uses the
+# listed page(s) directly and SKIPS the router LLM call (and a curated-correct page avoids a
+# gap→retry round) — that's the search-time saving. A miss falls back to the LLM router, so
+# this table is purely additive: only add a term when you're confident which page(s) answer it.
+#
+# Format:  <hint term>: [<exact page name>, ...]   (a bare string is fine for one page)
+# Keys are matched by EXACT normalized term (whitespace-insensitive, case-folded) against a
+# sub-question's hint_terms — not substring — so only add terms unique to one page (a confident
+# but wrong route can answer from the wrong deck without retrying). Page names must match the
+# index EXACTLY (the [[wikilink]] text). Targets not present in the index are silently dropped.
+# Only the FIRST routing attempt uses this table; retries diverge via the LLM router.
+# Delete this file to fall back to pure-LLM routing.
+
+# --- WACC (CAESAR is the only deck with a dedicated WACC page) ---
+WACC: FDD8 — [CAESAR] Valuation | WACC
+가중평균자본비용: FDD8 — [CAESAR] Valuation | WACC
+
+# --- Org / group structure — each deck's is a distinct page; key on the deck-specific concept ---
+회사 조직도: FDD10 — [LIFE] 회사 조직도
+조직도: FDD10 — [LIFE] 회사 조직도
+Group Structure: FDD3 — [STELLA] Group Structure
+그룹 구조: FDD3 — [STELLA] Group Structure
+Corporate Structure: FDD2 — [CAESAR] Target Overview | Corporate Structure (Dec-24)
+
+# --- STELLA valuation artifacts (each a unique page) ---
+DCF Summary: FDD17 — [STELLA] Valuation Summary | DCF Summary
+Adjusted NAV: FDD12 — [STELLA] Adjusted NAV
+GTC: FDD19 — [STELLA] Valuation Summary | GTC(Transaction Multiple)
+Transaction Multiple: FDD19 — [STELLA] Valuation Summary | GTC(Transaction Multiple)
+Exit Value: FDD10 — [STELLA] Valuation Summary [Exit Value 가정 비교]
+출자자: FDD11 — [STELLA] 출자자별 출자금액 현황
+출자금액: FDD11 — [STELLA] 출자자별 출자금액 현황
+Company Snapshot: FDD1 — [STELLA] Company Snapshot
+특수관계자: FDD5 — [STELLA] Related Party Transaction
+Related Party Transaction: FDD5 — [STELLA] Related Party Transaction
+
+# --- CAESAR specifics ---
+# "Manager Fee" is CAESAR's exact English term (STELLA/LIFE use 관리수수료/관리보수), so it stays.
+# Removed: Operating Revenue / Investment Performance / Major KPIs — generic PE concepts every
+# deck reports, so they collide across decks (a STELLA "Operating Revenue" question mis-routed to
+# CAESAR). Let the LLM router disambiguate those by deck context from the INDEX.
+Manager Fee: FDD5 — [CAESAR] Manager Fee (CP Holdings IA LLC - FVTPL)
+
+# --- LIFE specifics ---
+CSM: FDD8 — [LIFE] 보험계약부채 | 잔여보장-보험계약마진(CSM) 현황
+보험계약마진: FDD8 — [LIFE] 보험계약부채 | 잔여보장-보험계약마진(CSM) 현황
+KDB생명: FDD4 — [LIFE] KDB생명보험 개요
+KDB생명보험: FDD4 — [LIFE] KDB생명보험 개요
+보험영업 경영지표: FDD7 — [LIFE] 보험영업 경영지표
+
+# --- Excel headcount page (v0.2 only) ---
+임직원 수: 임직원 수

@@ -331,40 +331,66 @@ def _fdd_num(name: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def build_document(doc: str, entries: dict) -> dict:
+def build_document(doc: str, entries: dict, curated: dict | None = None) -> dict:
     """Build the per-PDF **document node** — the two-layer index for one source deck.
 
-    Upper layer: a detailed, LLM-synthesized description of the whole report (what company/deal,
-    which sections, what chart/matrix types, key figures) — so the router can pick the right
-    *document* from a question that only names the project. Lower layer: a table of contents of
-    the deck's pages (FDD#, title, one-line summary) — to then pick the right *page*. The
-    description is grounded in the deck's own page titles/summaries/figure labels (no new facts).
+    Upper layer: a detailed description of the whole report (what company/deal, which sections,
+    what chart/matrix types, key figures) — so the router can pick the right *document* from a
+    question that only names the project. Lower layer: a table of contents of the deck's pages
+    (FDD#, title, one-line summary) — to then pick the right *page*.
+
+    The upper layer is **curated > LLM > default**: a ``curated`` dict (one deck's block from
+    ``decks.yaml``) pins ``title``/``description`` by hand; whichever field it omits is filled by
+    the LLM, grounded in the deck's own page titles/summaries/figure labels (no new facts). When
+    both are pinned the LLM call is skipped entirely — the document node is then fully
+    deterministic. The lower-layer ToC is always derived from the pages.
     """
+    curated = curated or {}
     items = sorted(entries.items(), key=lambda kv: _fdd_num(kv[0]))
     toc = [{"page": n, "title": e.get("title") or n, "summary": e.get("desc") or ""}
            for n, e in items]
-    digest = "\n".join(
-        f"- {e.get('title') or n}: {e.get('desc') or ''}"
-        + (f"  [항목: {', '.join((it.get('label') or '') for it in (e.get('items') or [])[:8])}]"
-           if e.get("items") else "")
-        for n, e in items)
-    title, description = f"{doc} 보고서", ""
-    try:
-        raw = cached_chat(
-            [{"role": "system", "content": _DOC_SYSTEM},
-             {"role": "user", "content": f"보고서(프로젝트): {doc}\n\n페이지 목록:\n{digest}\n\nJSON:"}],
-            cache_dir=pdf_structure_cache(),
-            max_tokens=1200,
-            timeout=300,
-        )
-        obj = _json_span(raw, "{", "}")
-        if isinstance(obj, dict):
-            title = obj.get("title") or title
-            description = obj.get("description") or ""
-    except Exception:  # noqa: BLE001 — a deck still gets a ToC even if the description fails
-        pass
+    title = curated.get("title") or f"{doc} 보고서"
+    description = curated.get("description") or ""
+    if not (curated.get("title") and curated.get("description")):  # something still LLM-filled
+        digest = "\n".join(
+            f"- {e.get('title') or n}: {e.get('desc') or ''}"
+            + (f"  [항목: {', '.join((it.get('label') or '') for it in (e.get('items') or [])[:8])}]"
+               if e.get("items") else "")
+            for n, e in items)
+        try:
+            raw = cached_chat(
+                [{"role": "system", "content": _DOC_SYSTEM},
+                 {"role": "user", "content": f"보고서(프로젝트): {doc}\n\n페이지 목록:\n{digest}\n\nJSON:"}],
+                cache_dir=pdf_structure_cache(),
+                max_tokens=1200,
+                timeout=300,
+            )
+            obj = _json_span(raw, "{", "}")
+            if isinstance(obj, dict):
+                title = curated.get("title") or obj.get("title") or title
+                description = curated.get("description") or obj.get("description") or ""
+        except Exception:  # noqa: BLE001 — a deck still gets a ToC even if the description fails
+            pass
     return {"doc": doc, "title": title, "n_pages": len(toc),
             "description": description, "toc": toc}
+
+
+def _load_decks() -> dict:
+    """Load the curated first-layer index (``decks.yaml``) → ``{doc: {title?, description?}}``.
+
+    Absent file → ``{}`` (pure-LLM build, unchanged). Tolerant of an empty or malformed file."""
+    import yaml
+
+    from ..config import wiki_decks_yaml
+
+    path = wiki_decks_yaml()
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 — a bad curated file must not break the build
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
 
 
 def strip_pdf(index: dict) -> dict:
@@ -427,6 +453,9 @@ if __name__ == "__main__":
     # Namespace pages by source report only when ingesting several PDFs — a single-PDF build
     # keeps the original FDD{n} — {label} names. ``CAESAR_pages.pdf`` -> doc ``CAESAR``.
     multi = len(pdfs) > 1
+    decks = _load_decks()  # curated first layer (decks.yaml); {} = pure-LLM, unchanged
+    if decks:
+        print(f"pdf_pages: curated deck overrides for {sorted(decks)}")
     documents: dict = {}
     for pdf in pdfs:
         doc = re.sub(r"[_-]?pages$", "", Path(pdf).stem, flags=re.I)
@@ -434,7 +463,8 @@ if __name__ == "__main__":
         print(f"pdf_pages: ingest {pdf}  (doc={doc})")
         entries, alias_add, tree_add = build_pages(pdf, PAGES_DIR, index=index, doc=name_doc)
         merge_into_index(index, entries, alias_add, tree_add)
-        documents[doc] = build_document(doc, entries)   # two-layer: deck description + ToC
+        # two-layer node: deck description (curated > LLM > default) + ToC
+        documents[doc] = build_document(doc, entries, curated=decks.get(doc))
         print(f"   built {len(entries)} PDF page(s) + document node '{documents[doc]['title']}'")
     index["documents"] = documents
 

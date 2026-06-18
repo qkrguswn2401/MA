@@ -41,3 +41,13 @@ agent:
   datasets:
     v0.1: data/v0.1/wiki   # canonical Centroid valuation-model wiki (63-sheet model)
     v0.2: data/v0.2/wiki       # v0.2 test corpus: Excel ledgers + CAESAR/LIFE/STELLA FDD decks
+  router_top_k: 3            # env: MNA_ROUTER_TOPK — max pages the router opens per round
+  deterministic_retrieve: false  # env: MNA_DET_RETRIEVE — parse 'value [cell]' tables instead
+                                 # of an LLM call per structured page; off pending a quality A/B
+  # routes:                 # env: MNA_AGENT_ROUTES — explicit routes.yaml (single-dataset only)
+
+# Hand-authored, version-controlled curation (committed, unlike data/): per dataset version
+# under curation/<version>/ — decks.yaml (build-time deck descriptions) + routes.yaml (query-time
+# routing shortcuts). See src/stella_kb/config.py: curation_dir / wiki_decks_yaml / agent_routes_yaml.
+curation:
+  dir: curation             # env: MNA_CURATION_DIR

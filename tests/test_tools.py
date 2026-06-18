@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from apps.agent.graph.nodes import parse_action
-from apps.agent.io import lookup, open_page, trace_links
+from apps.agent.io import extract_page_items, lookup, open_page, route_lookup, trace_links
 
 # --- parse_action: salvage one JSON object from messy model output ---------------------
 
@@ -77,6 +77,116 @@ def test_trace_real_index_is_raw_only(index):
     chain = {c["sheet"]: c for c in trace_links(index, "제2호_거래내역", "down")}
     assert chain["제2호_비용"]["has_page"]        # ledger → cost: both `_raw` pages, openable
     assert "성과보수, 배당금" not in chain         # carry sheet is out of the `_raw` wiki
+
+
+# --- extract_page_items: deterministic "value [cell]" table parse (retriever bypass) ---
+
+_EXCEL_MD = """---
+sheet: 제2호_비용
+---
+# Operating Expenses
+
+## 운영비용
+
+| Item | KO | role | cell | 2017 | 2018 |
+|---|---|---|---|---|---|
+| GP관리보수 | GP관리보수 | expense | `C6` | 46328767 [D6] | 890000000 [E6] |
+| 합계 | 합계 | expense | `C13` | 51235594 [D13] | 1085403492 [E13] |
+"""
+
+_FDD_MD = """# FDD8 — WACC
+
+## Key figures
+
+| 항목 | 기간 | value |
+|---|---|---|
+| Risk Free Rate |  | 3.70% [FDD8] |
+| Cost of Equity |  | 14.6% [FDD8] |
+"""
+
+
+def test_extract_excel_table_values_periods_cells():
+    rows = extract_page_items(_EXCEL_MD)
+    gp = [r for r in rows if r["term"] == "GP관리보수"]
+    assert {"term": "GP관리보수", "period": "2017", "value": "46328767", "cell": "D6"} in gp
+    assert {"term": "GP관리보수", "period": "2018", "value": "890000000", "cell": "E6"} in gp
+    # the `cell` column (`C6`) is not a value cell → not emitted; only [ref]-tagged values are
+    assert all(r["cell"] in ("D6", "E6", "D13", "E13") for r in rows)
+
+
+def test_extract_fdd_value_table():
+    rows = extract_page_items(_FDD_MD)
+    assert {"term": "Risk Free Rate", "period": "", "value": "3.70%", "cell": "FDD8"} in rows
+    assert {"term": "Cost of Equity", "period": "", "value": "14.6%", "cell": "FDD8"} in rows
+
+
+def test_extract_hint_filter_keeps_only_matching_labels():
+    rows = extract_page_items(_EXCEL_MD, hint_terms=["GP관리보수"])
+    assert rows and all(r["term"] == "GP관리보수" for r in rows)
+
+
+def test_extract_prose_only_page_is_empty():
+    assert extract_page_items("# Title\n\n본문 텍스트, 표 없음.\n") == []
+
+
+def test_deterministic_retrieve_flag_defaults_off():
+    from src.stella_kb.config import agent_deterministic_retrieve
+    assert agent_deterministic_retrieve() is False
+
+
+# --- route_lookup: curated routes.yaml → pages (deterministic, no LLM) -----------------
+# The routes table is resolved by config.agent_routes_yaml; point it at a tmp file via the
+# MNA_AGENT_ROUTES env override so these stay decoupled from the curation/<version>/ layout.
+
+_IDX = {"pages": {"FDD8 — [CAESAR] WACC": {}, "회사 조직도": {}, "엉뚱페이지": {}}}
+
+
+def _routes_env(tmp_path, monkeypatch, body):
+    f = tmp_path / "routes.yaml"
+    f.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("MNA_AGENT_ROUTES", str(f))
+
+
+def test_route_lookup_hits_and_validates(tmp_path, monkeypatch):
+    _routes_env(tmp_path, monkeypatch,
+        "WACC: FDD8 — [CAESAR] WACC\n조직도: 회사 조직도\nSTALE: 존재하지않는페이지\n")
+    # normalized key match (whitespace/case-insensitive), order-preserving, deduped
+    assert route_lookup(["wacc"], _IDX) == ["FDD8 — [CAESAR] WACC"]
+    assert route_lookup([" 조직도 "], _IDX) == ["회사 조직도"]
+    # a curated target absent from the index is dropped → empty → caller uses the LLM router
+    assert route_lookup(["STALE"], _IDX) == []
+
+
+def test_route_lookup_no_file_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("MNA_AGENT_ROUTES", str(tmp_path / "nope.yaml"))
+    assert route_lookup(["WACC"], _IDX) == []
+
+
+def test_route_lookup_dedups_across_terms(tmp_path, monkeypatch):
+    _routes_env(tmp_path, monkeypatch, "a: 회사 조직도\nb: 회사 조직도\n")
+    assert route_lookup(["a", "b"], _IDX) == ["회사 조직도"]  # one page, not two
+
+
+# --- every committed routes.yaml target must exist in its index (catches typos / the YAML
+#     '#'-comment footgun) — skips a dataset whose wiki isn't built in this checkout ----------
+
+@pytest.mark.parametrize("version", ["v0.1", "v0.2"])
+def test_committed_routes_targets_exist(version):
+    import json
+
+    from src.stella_kb import ROOT
+
+    routes_path = ROOT / "curation" / version / "routes.yaml"
+    index_path = ROOT / "data" / version / "wiki" / "index.json"
+    if not routes_path.exists() or not index_path.exists():
+        pytest.skip(f"{version}: routes or built index absent")
+    import yaml
+
+    raw = yaml.safe_load(routes_path.read_text(encoding="utf-8")) or {}
+    pages = json.loads(index_path.read_text(encoding="utf-8"))["pages"]
+    dangling = [(k, p) for k, v in raw.items()
+                for p in (v if isinstance(v, list) else [v]) if p not in pages]
+    assert not dangling, f"{version}: routes point at non-existent pages: {dangling}"
 
 
 # --- lookup / open_page ---------------------------------------------------------------

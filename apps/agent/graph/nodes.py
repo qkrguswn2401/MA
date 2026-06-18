@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src.stella_kb import config
 from src.stella_kb.llm import chat
 
-from ..io import lookup, open_page, query_ledger, trace_links
+from ..io import extract_page_items, lookup, open_page, query_ledger, route_lookup, trace_links
 from ..prompts import load as load_prompt
 from .state import AgentState
 
@@ -135,32 +135,53 @@ def _match_page(raw_pick: str, valid: set, by_norm: dict) -> str | None:
     return by_norm.get(re.sub(r"\s+", "", p).casefold())
 
 
-def _route(sub: dict, tried: list, index: dict, index_md: str) -> tuple[list, dict | None, str]:
-    """Pick the wiki page(s) for one sub-question; on a trace sub-Q expand along the DAG."""
-    hints = sub.get("hint_terms") or []
-    lookups = "\n\n".join(lookup(index, t) for t in hints) if hints else "(no hint terms)"
-    avoid = (
-        (
-            f"\nAlready tried for this sub-question and found insufficient — pick a "
-            f"DIFFERENT page unless re-reading is clearly justified: {tried}"
-        )
-        if tried
-        else ""
-    )
-    user = (
-        f"INDEX:\n{index_md}\n\nLookup results:\n{lookups}\n\n"
-        f"Sub-question: {sub['ask']}{avoid}\n\nReturn the pages JSON."
-    )
-    act, _ = _ask(ROUTER, user, 400)
-    valid = set(index.get("pages", {}).keys())
-    by_norm = {re.sub(r"\s+", "", v).casefold(): v for v in valid}
-    picks, seen = [], set()
-    for raw in (act or {}).get("pages") or []:  # tolerate [[wikilink]]/quote forms
-        m = _match_page(raw, valid, by_norm)
-        if m and m not in seen:  # resolve + dedup; drop hallucinations
-            seen.add(m)
-            picks.append(m)
+def _route(sub: dict, tried: list, index: dict, index_md: str,
+           wiki_dir: str | None = None) -> tuple[list, dict | None, str]:
+    """Pick the wiki page(s) for one sub-question; on a trace sub-Q expand along the DAG.
 
+    First attempt only, try the **curated routing table** (``routes.yaml``): if a hint term maps
+    to existing pages, use them and **skip the router LLM** — the latency win (one fewer LLM call
+    per sub-question, and a curated-correct page avoids a ``gap``→retry round). On a retry
+    (``tried`` non-empty) the shortcut is bypassed so we don't re-pick the same pages; the LLM
+    router runs with the ``avoid`` list instead. The trace-mode DAG expansion runs for both.
+    """
+    hints = sub.get("hint_terms") or []
+    top_k = max(1, config.agent_router_top_k())  # max pages opened per round (recall vs cost)
+    picks: list = []
+    rthought = ""
+    if not tried:  # only short-circuit the first try; retries must diverge via the LLM router
+        picks = route_lookup(hints, index, wiki_dir)
+        if picks:
+            rthought = "routes.yaml 직결 — 라우터 LLM 생략"
+
+    if not picks:  # no curated hit (or this is a retry) → fall back to the LLM router
+        lookups = "\n\n".join(lookup(index, t) for t in hints) if hints else "(no hint terms)"
+        avoid = (
+            (
+                f"\nAlready tried for this sub-question and found insufficient — pick a "
+                f"DIFFERENT page unless re-reading is clearly justified: {tried}"
+            )
+            if tried
+            else ""
+        )
+        user = (
+            f"INDEX:\n{index_md}\n\nLookup results:\n{lookups}\n\n"
+            f"Sub-question: {sub['ask']}{avoid}\n\n"
+            f"답이 여러 페이지에 흩어져 있거나 비교·교차검증이면 관련 페이지를 한 번에 "
+            f"최대 {top_k}개까지 고르세요(가능성 높은 순). Return the pages JSON."
+        )
+        act, _ = _ask(ROUTER, user, 400)
+        valid = set(index.get("pages", {}).keys())
+        by_norm = {re.sub(r"\s+", "", v).casefold(): v for v in valid}
+        seen: set = set()
+        for raw in (act or {}).get("pages") or []:  # tolerate [[wikilink]]/quote forms
+            m = _match_page(raw, valid, by_norm)
+            if m and m not in seen:  # resolve + dedup; drop hallucinations
+                seen.add(m)
+                picks.append(m)
+        rthought = (act or {}).get("thought", "")
+
+    picks = picks[:top_k]  # deterministic cap — one round opens at most top_k pages
     path = None
     if sub.get("mode") == "trace" and picks:
         direction = sub.get("direction", "down")
@@ -168,14 +189,31 @@ def _route(sub: dict, tried: list, index: dict, index_md: str) -> tuple[list, di
         chain_pages = [c["sheet"] for c in chain if c["has_page"] and c["sheet"] not in picks][:5]
         path = {"ask": sub["ask"], "direction": direction, "start": picks[0], "chain": chain}
         picks = picks + chain_pages
-    return picks, path, (act or {}).get("thought", "")
+    return picks, path, rthought
 
 
-def _retrieve(ask: str, pages: list, wiki_dir: str | None = None) -> tuple[list, str]:
-    """Open the pages and extract evidence — one LLM call PER PAGE, fanned out concurrently."""
+def _retrieve(ask: str, pages: list, wiki_dir: str | None = None,
+              hint_terms: list | None = None) -> tuple[list, str]:
+    """Open the pages and extract evidence — one LLM call PER PAGE, fanned out concurrently.
+
+    When ``config.agent_deterministic_retrieve()`` is on, each page is first parsed with the
+    deterministic ``extract_page_items`` (its ``value [cell]`` table); on a hit that page's
+    evidence is taken verbatim and its LLM call is **skipped** (the latency win). Pages with no
+    parseable table fall back to the LLM extractor below. Off by default → pure-LLM, unchanged.
+    """
     if not pages:
         return [], "(no pages selected)"
     texts = {p: open_page(p, wiki_dir) for p in pages}
+
+    det: dict[str, list] = {}
+    if config.agent_deterministic_retrieve():
+        for page in pages:
+            items = extract_page_items(texts[page], hint_terms)
+            if items:
+                det[page] = [{"page": page, "cell": it["cell"], "term": it["term"],
+                              "period": str(it.get("period", "")), "value": str(it["value"]),
+                              "ask": ask} for it in items]
+    llm_pages = [p for p in pages if p not in det]
 
     def extract(page: str) -> list:
         user = f"Sub-question: {ask}\n\nWIKI PAGE:\n{texts[page]}\n\n" "Return the evidence JSON."
@@ -203,10 +241,13 @@ def _retrieve(ask: str, pages: list, wiki_dir: str | None = None) -> tuple[list,
 
     # branch threads spawn this pool too — the _LLM_SEM (not the worker count) is the real
     # cap, so total live threads can exceed _FANOUT but in-flight LLM requests never do.
-    with ThreadPoolExecutor(max_workers=min(_FANOUT, len(pages))) as ex:
-        per_page = list(ex.map(extract, pages))
-    ev = [e for page_ev in per_page for e in page_ev]
-    return ev, f"{len(ev)} fact(s) from {pages}"
+    per_page = []
+    if llm_pages:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT, len(llm_pages))) as ex:
+            per_page = list(ex.map(extract, llm_pages))
+    ev = [e for page_ev in per_page for e in page_ev] + [e for p in det for e in det[p]]
+    det_note = f" ({len(det)} page(s) deterministic)" if det else ""
+    return ev, f"{len(ev)} fact(s) from {pages}{det_note}"
 
 
 def _ledger_evidence(picks: list, sub: dict, wiki_dir: str | None = None) -> list:
@@ -256,13 +297,13 @@ def solve_node(state: AgentState, index: dict) -> AgentState:
     seen: set = set()  # (page, cell) already captured — dedup retries
     reads = seq = 0
     while True:
-        picks, path, rthought = _route(sub, tried, index, index_md)
+        picks, path, rthought = _route(sub, tried, index, index_md, wiki_dir)
         trace.append(_rec(idx, seq, "router", "route", ", ".join(picks) or "(none)", rthought))
         seq += 1
         if path:
             paths.append(path)
 
-        ev, summary = _retrieve(sub["ask"], picks, wiki_dir)
+        ev, summary = _retrieve(sub["ask"], picks, wiki_dir, sub.get("hint_terms"))
         led = _ledger_evidence(picks, sub, wiki_dir)  # deterministic 거래내역 filter+sum (rows not on page)
         if led:
             ev = ev + led

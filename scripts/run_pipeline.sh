@@ -4,12 +4,17 @@
 #
 #   data/raw/*_raw.xlsx
 #     → data/md/*.md            (1) grid dumps          [mechanical]
-#     → data/parsed/*.json      (2) LLM parse pass      [slow, needs vLLM]
-#     → data/wiki/pages/*.md    (3) wiki compile        [slow, needs vLLM]
+#     → data/parsed/*.json      (2) LLM parse pass      [needs vLLM; cached -> incremental]
+#     → data/wiki/pages/*.md    (3) wiki compile        [needs vLLM; prose cached -> incremental]
 #     → data/wiki/INDEX.md      (4) index / ToC         [mechanical]
 #       data/wiki/index.json
 #   data/raw/*.pdf
 #     → data/wiki/pages/FDD*.md (5) PDF ingest + merge  [slow, needs vLLM; skipped if no PDF]
+#     → (report)                (6) lint built wiki      [mechanical; broken links / orphans]
+#
+# Stages 2/3/5 cache their LLM calls (.cache/wiki_parse, .cache/wiki_prose, .cache/pdf_structure),
+# keyed by content — so an unchanged source is a cache hit (free, deterministic) and only edited
+# sheets/decks re-roll. Force a full fresh rebuild by clearing the relevant .cache/ dir first.
 #
 # Usage (from anywhere):
 #     ./run_pipeline.sh            full rebuild
@@ -36,29 +41,34 @@ if [ "$NO_LLM" -eq 0 ]; then
   fi
 fi
 
-echo "==> [1/5] dump sheets to markdown  -> data/md/"
+echo "==> [1/6] dump sheets to markdown  -> data/md/"
 "$PY" -m src.stella_kb.wiki.dump_md --all
 
 if [ "$NO_LLM" -eq 0 ]; then
-  echo "==> [2/5] LLM parse pass  -> data/parsed/   [slow]"
+  echo "==> [2/6] LLM parse pass  -> data/parsed/   [slow]"
   "$PY" -m src.stella_kb.wiki.parse_llm --all
 
-  echo "==> [3/5] compile wiki pages  -> data/wiki/pages/   [slow]"
+  echo "==> [3/6] compile wiki pages  -> data/wiki/pages/   [slow]"
   "$PY" -m src.stella_kb.wiki.compile --all
 else
-  echo "==> [2/5] LLM parse pass  -> skipped (--no-llm; reusing data/parsed/)"
-  echo "==> [3/5] compile wiki pages  -> data/wiki/pages/   (scaffold only)"
+  echo "==> [2/6] LLM parse pass  -> skipped (--no-llm; reusing data/parsed/)"
+  echo "==> [3/6] compile wiki pages  -> data/wiki/pages/   (scaffold only)"
   "$PY" -m src.stella_kb.wiki.compile --all --no-llm
 fi
 
-echo "==> [4/5] build index / ToC  -> data/wiki/INDEX.md, index.json"
+echo "==> [4/6] build index / ToC  -> data/wiki/INDEX.md, index.json"
 "$PY" -m src.stella_kb.wiki.index
 
 if [ "$NO_LLM" -eq 0 ]; then
-  echo "==> [5/5] PDF ingest + merge into index  -> data/wiki/pages/FDD*.md   [slow]"
+  echo "==> [5/6] PDF ingest + merge into index  -> data/wiki/pages/FDD*.md   [slow]"
   "$PY" -m src.stella_kb.wiki.pdf_pages          # self-skips if no data/raw/*.pdf
 else
-  echo "==> [5/5] PDF ingest  -> skipped (--no-llm; existing FDD pages left as-is)"
+  echo "==> [5/6] PDF ingest  -> skipped (--no-llm; existing FDD pages left as-is)"
 fi
 
-echo "==> done. entry point: data/wiki/INDEX.md"
+WIKI_DIR="${MNA_WIKI_DATA:-data/v0.1}/wiki"
+echo "==> [6/6] lint the built wiki  ($WIKI_DIR)"
+"$PY" -m src.stella_kb.wiki.lint "$WIKI_DIR" || \
+  echo "    !! lint found error-severity issues (see above) — build left in place for inspection"
+
+echo "==> done. entry point: $WIKI_DIR/INDEX.md"

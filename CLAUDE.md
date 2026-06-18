@@ -75,9 +75,11 @@ src/stella_kb/
   llm.py                  # OpenAI-compatible client (local vLLM); whitelist-guarded term->Metric
   prompts/                # build-pipeline prompts (pdf_page_system, pdf_doc_system, ...)
   graph/                  # property-graph KB paradigm (extract / semantic / metrics / lift / query / viz)
-  wiki/                   # vectorless wiki paradigm (dump_md -> parse_llm -> compile -> index -> pdf_pages)
+  wiki/                   # vectorless wiki paradigm (dump_md -> parse_llm -> compile -> index -> pdf_pages -> lint)
     pdf_pages.py          # PDF ingest: vision describe -> structured figures + RAW grids/diagrams on page;
                           #   per-deck two-layer "document" node (description + ToC); keeps no-figure pages
+    lint.py               # maintenance pass (deterministic, offline): broken [[link]] / orphan alias / missing
+                          #   + orphan page / stale route; --fix prunes index.json drift; --contradictions opt-in
   parsers/pdf/            # vision PDF parser (describe/vision/tables/router); emits tables + [그래프]/[다이어그램]
 apps/agent/               # query agent (separate from the build pipeline)
   core.py                 # public API: run / ask / answer(router) / stream_run  — takes a dataset `store`
@@ -110,6 +112,11 @@ python -m src.stella_kb.graph.query       # ask questions: resolve -> traverse -
 # point the env at its dir — no code edits (run_pipeline.sh inherits the exported env):
 MNA_WIKI_WORKBOOK=<x.xlsx> MNA_WIKI_DATA=data/v0.2 MNA_WIKI_PDF_DIR=test_data/v0.2 scripts/run_pipeline.sh
 # then register it in config.yaml `agent.datasets` so the API/UI can select it.
+# Rebuilds are INCREMENTAL + deterministic: the parse/compile/PDF LLM calls are content-addressed
+# on disk (.cache/wiki_parse, .cache/wiki_prose, .cache/pdf_structure via llm.cached_chat), so an
+# unchanged sheet/deck is a cache hit (no LLM call, identical output) and only edited sources
+# re-roll. Stage [6/6] lints the built wiki (broken links / orphans). To force a fresh rebuild of
+# a stage, clear its .cache/ dir first.
 
 # web UI (two processes): FastAPI backend + Vite frontend
 scripts/run_server.sh                     # backend on :5001 (HTML fallback at /ui); /datasets lists versions
