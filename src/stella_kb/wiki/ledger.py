@@ -82,9 +82,12 @@ def _find_cols(ws, sheet: str) -> list[dict]:
     out_header_row = 1
     for i, dc in enumerate(desc_cols):
         c1 = desc_cols[i + 1] - 1 if i + 1 < len(desc_cols) else maxc
-        # gather this band's columns (from a bit before 적요 to the next 적요)
-        in_band = lambda tok, lo=max(1, dc - 3), hi=c1: next(  # noqa: E731
-            (c for c, t in htok.items() if t == tok and lo <= c <= hi), None)
+        lo = max(1, dc - 3)
+
+        # Find the first column carrying ``tok`` within [lo, c1] — one per band.
+        def in_band(tok: str, lo: int = lo, hi: int = c1) -> int | None:
+            return next((c for c, t in htok.items() if t == tok and lo <= c <= hi), None)
+
         oc = in_band(_OUT)
         # find the header row of 출금/입금 (the data starts just below it)
         if oc:
@@ -162,13 +165,15 @@ def query_ledger_rows(rows: list[dict | TransactionRow], keywords: list[str],
             hit_per_kw[k] += 1
         amt = r.get(field)
         cur = r.get("currency", "KRW")
+        krw_equiv = r.get("krw_equiv")
         if isinstance(amt, (int, float)):
             totals[cur] = totals.get(cur, 0.0) + amt
-            krw = r.get("krw_equiv") if cur == "USD" and r.get("krw_equiv") else (amt if cur == "KRW" else None)
+            # KRW band: use raw amount; USD band: use the per-row 원화 equivalent if present
+            krw = krw_equiv if cur == "USD" and krw_equiv else (amt if cur == "KRW" else None)
             if isinstance(krw, (int, float)):
                 totals_krw[cur] = totals_krw.get(cur, 0.0) + krw
         matched.append({"currency": cur, "desc": desc, field: amt,
-                        "krw_equiv": r.get("krw_equiv"), "ref": r.get("ref"),
+                        "krw_equiv": krw_equiv, "ref": r.get("ref"),
                         "date": r.get("date"), "party": r.get("party")})
     return {
         "keywords": kws,

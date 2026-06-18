@@ -8,12 +8,11 @@ executor) and the blocking vLLM health probe is offloaded with ``to_thread``, so
 is never stalled and a streaming SSE connection isn't pinned to a threadpool thread.
 
 Run (from repo root, venv active; needs data/wiki/ and the local vLLM — see llm.py):
-    .venv/bin/uvicorn apps.agent.api.server:app --host 0.0.0.0 --port 8000
-    # interactive docs at http://localhost:8000/docs
+    .venv/bin/uvicorn apps.agent.api.server:app --host 0.0.0.0 --port 5001
+    # interactive docs at http://localhost:5001/docs
 
-    curl -s localhost:8000/health
-    curl -s localhost:8000/ask -H 'Content-Type: application/json' \
-         -d '{"question": "기업가치는 얼마인가요?"}' | python -m json.tool
+    curl -s localhost:5001/health
+    curl -s 'localhost:5001/ask?question=기업가치는+얼마인가요%3F' | python -m json.tool
 """
 
 from __future__ import annotations
@@ -38,6 +37,10 @@ from .schema import AskResponse
 # the static chat frontend (single-file HTML fallback; React app lives in frontend/)
 # server.py = apps/agent/api/server.py -> parents[3] = repo root
 WEB_DIR = Path(__file__).resolve().parents[3] / "frontend" / "web"
+
+# Required headers for Server-Sent Events: no caching and disable nginx buffering so each
+# event reaches the client immediately rather than accumulating in the proxy buffer.
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
 def _resolve_store(dataset: str | None) -> datasets.WikiStore:
@@ -160,7 +163,7 @@ async def ask_stream(
     Inputs are query parameters (the browser drives this with ``EventSource``, which is GET-only
     and can't send a body). Emits one ``step`` event per agent decision (which page it opens and
     why), a final ``answer`` event, then ``done``. Consume with an EventSource (browser) or
-    ``curl -N localhost:8000/ask/stream?question=...``.
+    ``curl -N localhost:5001/ask/stream?question=...``.
     """
     if not question.strip():
         raise HTTPException(status_code=422, detail="question must not be empty")
@@ -179,9 +182,7 @@ async def ask_stream(
 
     # async generator → the SSE connection is driven on the event loop, not a pinned thread;
     # the sync agent nodes run in LangGraph's executor under astream (loop stays free).
-    return StreamingResponse(
-        gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.get("/", include_in_schema=False)

@@ -58,28 +58,30 @@ def build(parsed_dir: Path = PARSED_DIR, workbook: str = WORKBOOK) -> nx.DiGraph
               for p in sorted(parsed_dir.glob("*.json"))}
     g = nx.DiGraph()
 
-    # (sheet, value_row) -> metric_id, so we can map a cell back to the metric it belongs to
+    # (sheet, value_row) -> metric_id, so we can map a cell back to its metric
     cell_row_to_metric: dict[tuple[str, int], str] = {}
 
     for sheet, data in parsed.items():
         cls = classify(sheet)
         meta = data.get("meta") or {}
-        axis = (data.get("year_axis") or {}).get("columns") or {}
+        raw_axis = data.get("year_axis") or {}
+        axis = raw_axis.get("columns") or {}
         fund, entity = _fund_entity(sheet, cls)
 
-        sheet_id, section_id = f"Sheet:{sheet}", f"Section:{cls['section']}"
-        g.add_node(sheet_id, type="Sheet", title=meta.get("title") or sheet,
-                   case=meta.get("case") or cls["case"], unit=meta.get("unit"))
+        sheet_id = f"Sheet:{sheet}"
+        section_id = f"Section:{cls['section']}"
+        title = meta.get("title") or sheet
+        case = meta.get("case") or cls["case"]
+        unit = meta.get("unit")
+        g.add_node(sheet_id, type="Sheet", title=title, case=case, unit=unit)
         if section_id not in g:
             g.add_node(section_id, type="Section", label=cls["section"])
         g.add_edge(sheet_id, section_id, type="PART_OF")
 
         if fund:
-            fid = f"Fund:{fund}"
-            g.add_nodes_from([(fid, {"type": "Fund", "label": fund})])
+            g.add_node(f"Fund:{fund}", type="Fund", label=fund)
         if entity:
-            eid = f"Entity:{entity}"
-            g.add_nodes_from([(eid, {"type": "Entity", "label": entity})])
+            g.add_node(f"Entity:{entity}", type="Entity", label=entity)
 
         # periods this sheet covers
         for yr in {v for v in axis.values() if isinstance(v, int)}:
@@ -126,35 +128,38 @@ def _collapse_dependencies(g: nx.DiGraph, workbook: str,
     ``DEPENDS_ON`` edge metric→metric. Transitive so real flows aren't lost between
     distant anchor rows."""
     dg = build_dependency_graph(workbook)
-    cells = dg.cells                                  # cell_id -> CellInfo (formula cells)
+    formula_cells = dg.cells  # cell_id -> CellInfo (formula cells only)
 
-    def cell_metric(cell_id: str) -> str | None:
-        sheet, _, ref = cell_id.partition("!")
+    def metric_for_cell(cid: str) -> str | None:
+        """Map a cell id to its owning metric by row number, or None if unanchored."""
+        sheet, _, ref = cid.partition("!")
         m = _COL_ROW.match(ref)
         return cell_row_to_metric.get((sheet, int(m.group(2)))) if m else None
 
-    # which formula cells belong to a metric (start points for the walk)
+    # group formula cells by their owning metric (start points for the walk)
     metric_cells: dict[str, list[str]] = collections.defaultdict(list)
-    for cid in cells:
-        mid = cell_metric(cid)
+    for cid in formula_cells:
+        mid = metric_for_cell(cid)
         if mid:
             metric_cells[mid].append(cid)
 
+    # count how many cell-level paths cross each (source_metric, dest_metric) pair
     weights: dict[tuple[str, str], int] = collections.Counter()
-    for mid, starts in metric_cells.items():
+    for dest_mid, starts in metric_cells.items():
         for start in starts:
-            seen, stack = set(), list(cells[start].precedents)
+            seen: set[str] = set()
+            stack = list(formula_cells[start].precedents)
             while stack:
                 p = stack.pop()
                 if p in seen:
                     continue
                 seen.add(p)
-                src = cell_metric(p)
-                if src and src != mid:
-                    weights[(src, mid)] += 1        # src drives mid
-                    continue                        # stop at the first anchored ancestor
-                if p in cells:                      # unanchored intermediate -> keep walking
-                    stack.extend(cells[p].precedents)
+                src_mid = metric_for_cell(p)
+                if src_mid and src_mid != dest_mid:
+                    weights[(src_mid, dest_mid)] += 1  # src drives dest
+                    continue                            # stop: don't walk through an anchor
+                if p in formula_cells:                 # unanchored intermediate: keep walking
+                    stack.extend(formula_cells[p].precedents)
 
     for (src, dst), w in weights.items():
         g.add_edge(src, dst, type="DEPENDS_ON", weight=w)

@@ -108,9 +108,9 @@ def resolve_metric(term: str, timeout: float = 60.0) -> dict:
     return one of them or ``null`` — a returned id outside ``METRIC_IDS`` is rejected to
     ``null`` rather than trusted, so no hallucinated node can leak through.
     """
-    sys = load_prompt("resolve_metric_system")
+    system = load_prompt("resolve_metric_system")
     user = f"Catalog:\n{_catalog()}\n\nTerm: {term!r}\nJSON:"
-    raw = chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
+    raw = chat([{"role": "system", "content": system}, {"role": "user", "content": user}],
                max_tokens=80, timeout=timeout)
     obj = _json_span(raw, "{", "}")
     if not isinstance(obj, dict):
@@ -129,9 +129,9 @@ def resolve_metrics(question: str, max_metrics: int = 4, timeout: float = 60.0) 
     so a hallucinated id is dropped rather than trusted. Order-preserving, deduplicated,
     capped at ``max_metrics``.
     """
-    sys = load_prompt("resolve_metrics_system")
+    system = load_prompt("resolve_metrics_system")
     user = f"Catalog:\n{_catalog()}\n\nQuestion: {question!r}\nJSON array:"
-    raw = chat([{"role": "system", "content": sys}, {"role": "user", "content": user}],
+    raw = chat([{"role": "system", "content": system}, {"role": "user", "content": user}],
                max_tokens=120, timeout=timeout)
     arr = _json_span(raw, "[", "]")
     if not isinstance(arr, list):
@@ -151,7 +151,7 @@ if __name__ == "__main__":
     for term in ["관리수수료", "carry", "discount rate", "성과보수", "EV", "누적 AUM",
                  "퇴직급여충당부채", "그냥 아무 말"]:
         r = resolve_metric(term)
-        print(f"  {term:16s} -> {str(r.get('id')):26s} (conf {r.get('confidence')})")
+        print(f"  {term:16s} -> {str(r['id']):26s} (conf {r.get('confidence')})")
     print("\nmulti-metric fan-out:")
     for q in ["compare the management fee and the performance fee",
               "EBITDA와 FCFF 추이", "what is the equity value?"]:

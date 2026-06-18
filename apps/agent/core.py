@@ -88,6 +88,25 @@ def _limit() -> dict:
     return {"recursion_limit": 25}
 
 
+def _resolve_index(store: Any, index: dict | None) -> dict:
+    """Resolve the wiki index with store > explicit index > process default precedence."""
+    if store is not None:
+        return store.index
+    if index is not None:
+        return index
+    return load_index()
+
+
+def _build_result(final: dict[str, Any]) -> dict[str, Any]:
+    """Extract the four standard result keys from a completed graph state."""
+    return {
+        "answer": (final.get("answer") or "(no answer)").strip(),
+        "trace": _renumber(final.get("trace", [])),
+        "steps": final.get("steps", 0),
+        "evidence": final.get("evidence", []),
+    }
+
+
 def run(question: str, max_steps: int = 3, verbose: bool = False,
         index: dict | None = None, app: Any = None, store: Any = None,
         save: bool = False) -> dict[str, Any]:
@@ -109,13 +128,9 @@ def run(question: str, max_steps: int = 3, verbose: bool = False,
     only a deliberately-saved query becomes permanent.
     """
     if app is None:
-        idx = store.index if store is not None else (index if index is not None else load_index())
-        app = build_app(idx)
+        app = build_app(_resolve_index(store, index))
     final: dict[str, Any] = app.invoke(_seed(question, max_steps, verbose, store), config=_limit())
-    result = {"answer": (final.get("answer") or "(no answer)").strip(),
-              "trace": _renumber(final.get("trace", [])),
-              "steps": final.get("steps", 0),
-              "evidence": final.get("evidence", [])}
+    result = _build_result(final)
     if save:
         from .io import persist_answer
         result["saved"] = persist_answer(
@@ -136,13 +151,9 @@ async def arun(question: str, max_steps: int = 3, verbose: bool = False,
     blocked (the sync node functions run in LangGraph's executor). Same return shape as ``run``.
     Used by the async API; the sync ``run`` stays for the eval/CLI callers."""
     if app is None:
-        idx = store.index if store is not None else (index if index is not None else load_index())
-        app = build_app(idx)
+        app = build_app(_resolve_index(store, index))
     final: dict[str, Any] = await app.ainvoke(_seed(question, max_steps, verbose, store), config=_limit())
-    return {"answer": (final.get("answer") or "(no answer)").strip(),
-            "trace": _renumber(final.get("trace", [])),
-            "steps": final.get("steps", 0),
-            "evidence": final.get("evidence", [])}
+    return _build_result(final)
 
 
 async def aanswer(question: str, source: str = "auto", max_steps: int = 3,
@@ -168,8 +179,7 @@ def stream_run(question: str, max_steps: int = 3, index: dict | None = None, sto
       {"type": "step",   "step": int, "action": str, "arg": str, "thought": str}
       {"type": "answer", "answer": str, "steps": int}
     """
-    idx = store.index if store is not None else (index if index is not None else load_index())
-    app = build_app(idx)
+    app = build_app(_resolve_index(store, index))
     emitted = 0
     final: dict[str, Any] = {}
     for state in app.stream(_seed(question, max_steps, False, store), config=_limit(),
@@ -190,8 +200,7 @@ async def astream_run(question: str, max_steps: int = 3, index: dict | None = No
     """Async twin of :func:`stream_run` — an async generator over ``app.astream`` so the SSE
     endpoint can stream without pinning a threadpool thread for the connection's lifetime. Emits
     the same ``step``/``answer`` event dicts; LangGraph runs the sync nodes in its executor."""
-    idx = store.index if store is not None else (index if index is not None else load_index())
-    app = build_app(idx)
+    app = build_app(_resolve_index(store, index))
     emitted = 0
     final: dict[str, Any] = {}
     async for state in app.astream(_seed(question, max_steps, False, store), config=_limit(),

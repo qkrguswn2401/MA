@@ -264,7 +264,7 @@ def persist_answer(question: str, answer: str, evidence: list[dict],
     page = page or qa.target_page(evidence)
     if not page:
         return {"ok": False, "page": None, "reason": "no target page in evidence"}
-    page_path = (Path(wiki_dir) / "pages" if wiki_dir else PAGES_DIR) / f"{page}.md"
+    page_path = base / "pages" / f"{page}.md"
     if not page_path.exists():
         return {"ok": False, "page": page, "reason": f"target page {page!r} not found"}
 

@@ -203,8 +203,7 @@ def _check_routes(wiki_dir: Path, valid_pages: set[str]) -> list[dict]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:  # noqa: BLE001 — a broken routes file is the agent's problem, not lint's
-        return [_finding("stale_route", "warn", "routes.yaml",
-                         f"{path} is not valid YAML")]
+        return [_finding("stale_route", "warn", "routes.yaml", f"{path} is not valid YAML")]
     if not isinstance(data, dict):
         return []
     findings: list[dict] = []

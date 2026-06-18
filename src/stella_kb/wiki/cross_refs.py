@@ -90,8 +90,10 @@ def build_cross_refs(index: dict, entity_terms: tuple[str, ...] = _ENTITY_TERMS,
 
         # Tier B — specific shared metric, but ONLY for same-entity decks (Gate 0)
         if _deck_of(fname, documents) in matching:
-            f_terms = {_norm(t) for t in (f.get("aliases") or [])}
-            f_terms |= {_norm(it.get("label") or "") for it in (f.get("items") or [])}
+            f_aliases = f.get("aliases") or []
+            f_items = f.get("items") or []
+            f_terms = {_norm(t) for t in f_aliases}
+            f_terms |= {_norm(it.get("label") or "") for it in f_items}
             for t in f_terms:
                 hosts = pages_per_term.get(t)
                 if not hosts or len(hosts) > k:        # skip unknown / generic (category) terms
@@ -121,9 +123,12 @@ def build_cross_refs(index: dict, entity_terms: tuple[str, ...] = _ENTITY_TERMS,
     for e in excel:
         if pages[e].get("cited_by"):
             pages[e]["cited_by"] = sorted(set(pages[e]["cited_by"]))
-    return {"edges": n_edges, "judged": judged,
-            "pdf_with_links": sum(1 for p in pages.values() if p.get("derives_from")),
-            "excel_cited": sum(1 for nm in excel if pages[nm].get("cited_by"))}
+    return {
+        "edges": n_edges,
+        "judged": judged,
+        "pdf_with_links": sum(1 for p in pages.values() if p.get("derives_from")),
+        "excel_cited": sum(1 for nm in excel if pages[nm].get("cited_by")),
+    }
 
 
 _JUDGE_SYS = (

@@ -196,10 +196,9 @@ if __name__ == "__main__":
     for t in ("Section", "Entity", "Fund", "Metric", "Period"):
         members = [n for n, d in sg.nodes(data=True) if d.get("type") == t]
         print(f"  {t}: {len(members)}  {members[:6]}")
-    edge_kinds = {}
-    for *_, d in sg.edges(data=True):
-        edge_kinds[d.get("type")] = edge_kinds.get(d.get("type"), 0) + 1
-    print("edge types:", edge_kinds)
+    from collections import Counter
+    edge_kinds = Counter(d.get("type") for *_, d in sg.edges(data=True))
+    print("edge types:", dict(edge_kinds))
     print("top sheet->sheet dependencies:")
     top = sorted((d["weight"], u, v) for u, v, d in sg.edges(data=True)
                  if d.get("type") == "DEPENDS_ON" and "weight" in d)

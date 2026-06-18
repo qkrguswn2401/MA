@@ -106,8 +106,7 @@ def _desc(sheet: str) -> str | None:
     if not para or para.startswith("_("):  # scaffold / "prose unavailable"
         return None
     first = re.split(r"(?<=다)\.\s", para)[0].strip().rstrip(".") + "."
-    first = re.sub(rf"^'{re.escape(sheet)}'\s*시트", "이 시트", first)  # drop redundant sheet name
-    return first
+    return re.sub(rf"^'{re.escape(sheet)}'\s*시트", "이 시트", first)  # drop redundant sheet name
 
 
 def load_all_values() -> dict[str, dict]:
@@ -175,6 +174,28 @@ def build_sheet_dag(path: str) -> dict[str, dict[str, list[str]]]:
     return {s: {k: sorted(v) for k, v in d.items()} for s, d in links.items()}
 
 
+def _collect_aliases(items: list, sheet: str, alias_index: dict[str, list]) -> list[str]:
+    """Per-page alias terms for ``sheet``, while feeding each into the global ``alias_index``
+    (``normalized term -> [{page, cell, term}]``, the resolver's lookup table).
+
+    Every label/ko/en/extra-alias of every item is an alias. A (page, cell) pair is recorded
+    once per normalized term, so an alias repeated across rows isn't double-listed in the index.
+    """
+    page_aliases: list[str] = []
+    for it in items:
+        cell = it.get("label_cell")
+        terms = [it.get("label"), it.get("label_ko"), it.get("label_en"), *(it.get("aliases") or [])]
+        for term in terms:
+            if not term:
+                continue
+            if term not in page_aliases:
+                page_aliases.append(term)
+            bucket = alias_index.setdefault(_norm(term), [])
+            if not any(h["page"] == sheet and h["cell"] == cell for h in bucket):
+                bucket.append({"page": sheet, "cell": cell, "term": term})
+    return page_aliases
+
+
 def build_index() -> dict:
     all_vals = load_all_values()
     raw_sheets = set(all_vals)  # the canonical `_raw` sheet set — the index covers only these
@@ -200,20 +221,7 @@ def build_index() -> dict:
         tables = usable_tables(data, vals)
         items = all_items(data, vals)
 
-        # per-page alias set + feed the global alias index (term -> page+cell)
-        page_aliases: list[str] = []
-        for it in items:
-            cell = it.get("label_cell")
-            terms = [it.get("label"), it.get("label_ko"), it.get("label_en"), *(it.get("aliases") or [])]
-            for t in terms:
-                if not t:
-                    continue
-                if t not in page_aliases:
-                    page_aliases.append(t)
-                key = _norm(t)
-                bucket = aliases.setdefault(key, [])
-                if not any(h["page"] == sheet and h["cell"] == cell for h in bucket):
-                    bucket.append({"page": sheet, "cell": cell, "term": t})
+        page_aliases = _collect_aliases(items, sheet, aliases)
 
         link = links.get(sheet, {})
         entry = {

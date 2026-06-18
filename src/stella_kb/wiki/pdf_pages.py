@@ -127,13 +127,17 @@ def _xrefs(entry: dict, index: dict, cap: int = 6) -> list[str]:
     pages = index.get("pages", {})
     fund_pages: dict[str, list[str]] = {}
     for nm, e in pages.items():
-        if e.get("source") != "PDF" and str(e.get("section", "")).startswith("Biz Plan"):
-            fund_pages.setdefault(e.get("group"), []).append(nm)
+        section = str(e.get("section", ""))
+        if e.get("source") != "PDF" and section.startswith("Biz Plan"):
+            group = e.get("group")
+            fund_pages.setdefault(group, []).append(nm)
 
+    entry_items = entry.get("items") or []
+    entry_aliases = entry.get("aliases") or []
     terms = (
-        " ".join(it.get("label") or "" for it in (entry.get("items") or []))
+        " ".join(it.get("label") or "" for it in entry_items)
         + " "
-        + " ".join(entry.get("aliases") or [])
+        + " ".join(entry_aliases)
     )
     blob_flat, blob_nums = _norm(terms), set(_FUND_REF.findall(terms))
     out: list[str] = []
@@ -157,8 +161,10 @@ def structure_section(label: str, text: str, timeout: float = 600.0) -> dict:
     obj = _json_span(raw, "{", "}")
     if not isinstance(obj, dict):
         return {}
+    raw_figures = obj.get("figures") or []
     obj["figures"] = [
-        f for f in (obj.get("figures") or []) if isinstance(f, dict) and f.get("value") and _grounded(f["value"], text)
+        f for f in raw_figures
+        if isinstance(f, dict) and f.get("value") and _grounded(f["value"], text)
     ]
     return obj
 
@@ -227,7 +233,8 @@ def _page_md(name: str, tag: str, label: str, s: dict, xref: list[str] | None = 
         "| 항목 | 기간 | value |",
         "|---|---|---|",
     ]
-    for f in s.get("figures") or []:
+    figures = s.get("figures") or []
+    for f in figures:
         out.append(f"| {f.get('label','')} | {f.get('period','') or ''} | {f.get('value','')} [{tag}] |")
     # Full vision markdown verbatim — every cell, [그래프] block, and [다이어그램] edge-list the
     # structurer didn't lift (matrices, dense tables, org/structure diagrams). The marker line
@@ -274,7 +281,8 @@ def build_pages(
     for i, (label, text, s) in enumerate(structured, 1):  # number by section position (stable)
         figs = s.get("figures") or []
         raw_tables = _extract_tables(text)            # the page's full grids, verbatim
-        page_aliases = [a for a in (s.get("aliases") or []) if a]
+        s_aliases = s.get("aliases") or []
+        page_aliases = [a for a in s_aliases if a]
         page_aliases += [t for t in _table_terms(raw_tables) if _norm(t) not in
                          {_norm(a) for a in page_aliases}]   # + header/row-label terms
         # Only a genuinely empty page (no figures, no aliases, no tables — a cover/divider) is
@@ -285,8 +293,9 @@ def build_pages(
         # When the breadcrumb regex missed and the label fell back to "페이지 N", use the LLM's
         # structured title instead — an uninformative "페이지 N" page name/ToC entry is unroutable
         # (the router can't tell it's the Corporate Structure page from "페이지 2").
-        if re.fullmatch(r"페이지 \d+", label) and s.get("title"):
-            label = re.sub(r"\s+", " ", s["title"]).strip()
+        s_title = s.get("title")
+        if re.fullmatch(r"페이지 \d+", label) and s_title:
+            label = re.sub(r"\s+", " ", s_title).strip()
         tag = f"FDD{i}"
         # A label can carry '/' (e.g. a "(2/2)" continuation marker); '/' in a page name
         # breaks the filesystem write and the page-key↔filename match. Sanitize like the
@@ -297,10 +306,11 @@ def build_pages(
         name = f"FDD{i} — {prefix}{label}".replace("/", "_")
         group = f"{prefix}{label}"
         labels = [f.get("label") for f in figs if f.get("label")]
+        s_summary = s.get("summary") or ""
         entry = {
             "sheet": name,
-            "title": s.get("title") or label,
-            "desc": (s.get("summary") or "").split(". ")[0][:120] or label,
+            "title": s_title or label,
+            "desc": s_summary.split(". ")[0][:120] or label,
             "section": SECTION,
             "group": group,
             # The Stella deck's reporting window; unknown/mixed across decks in a multi-PDF
@@ -345,12 +355,17 @@ def build_document(doc: str, entries: dict, curated: dict | None = None) -> dict
     deterministic. The lower-layer ToC is always derived from the pages.
     """
     curated = curated or {}
+    curated_title = curated.get("title")
+    curated_desc = curated.get("description")
+
     items = sorted(entries.items(), key=lambda kv: _fdd_num(kv[0]))
-    toc = [{"page": n, "title": e.get("title") or n, "summary": e.get("desc") or ""}
+    toc = [{"page": n, "title": e.get("title") or n,
+            "summary": e.get("desc") or ""}
            for n, e in items]
-    title = curated.get("title") or f"{doc} 보고서"
-    description = curated.get("description") or ""
-    if not (curated.get("title") and curated.get("description")):  # something still LLM-filled
+    title = curated_title or f"{doc} 보고서"
+    description = curated_desc or ""
+
+    if not (curated_title and curated_desc):  # something still LLM-filled
         digest = "\n".join(
             f"- {e.get('title') or n}: {e.get('desc') or ''}"
             + (f"  [항목: {', '.join((it.get('label') or '') for it in (e.get('items') or [])[:8])}]"
@@ -397,7 +412,7 @@ def strip_pdf(index: dict) -> dict:
     section, the per-deck document nodes) so a rebuild replaces cleanly."""
     pdf = {n for n, e in index["pages"].items() if e.get("source") == "PDF"}
     for n in pdf:
-        index["pages"].pop(n, None)
+        del index["pages"][n]
     index["tree"].pop(SECTION, None)
     index.pop("documents", None)
     ai = index["alias_index"]
@@ -415,9 +430,9 @@ def merge_into_index(index: dict, entries: dict, alias_add: dict, tree_add: dict
     index["pages"].update(entries)
     ai = index["alias_index"]
     for key, bucket in alias_add.items():
-        ai.setdefault(key, []).extend(
-            b for b in bucket if not any(h["page"] == b["page"] and h["cell"] == b["cell"] for h in ai.get(key, []))
-        )
+        existing = ai.setdefault(key, [])
+        existing_pairs = {(h["page"], h["cell"]) for h in existing}
+        existing.extend(b for b in bucket if (b["page"], b["cell"]) not in existing_pairs)
     for section, groups in tree_add.items():
         dst = index["tree"].setdefault(section, {})
         for g, names in groups.items():

@@ -154,9 +154,8 @@ def describe_pdf(
                 model=resolved_model, system=_SYSTEM, user=cache_user, compute=_compute)
         except RuntimeError as e:
             log.error("vision 최종 실패 page=%d — pymupdf 텍스트 폴백: %s", page_num, e)
+            # ref[page_num] is the pymupdf text; None means pymupdf also found nothing
             fallback = ref.get(page_num) or f"(vision describe failed: page {page_num})"
-            if fallback == "(reference unavailable)":
-                fallback = f"(vision describe failed: page {page_num})"
             return page_num, fallback, True
         return page_num, md, False
 

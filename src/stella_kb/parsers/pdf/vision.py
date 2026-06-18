@@ -76,6 +76,7 @@ def invoke_vision(
 
 def _cache_key(model: str, system: str, user: str) -> str:
     h = hashlib.sha256()
+    # NUL-delimited so "ab" + "c" ≠ "a" + "bc"
     for part in (model, system, user):
         h.update(part.encode("utf-8"))
         h.update(b"\x00")

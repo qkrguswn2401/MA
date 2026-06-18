@@ -141,9 +141,10 @@ def page_currency(meta: dict, items: list, sheet: str) -> tuple[str, str, dict]:
       - ``per_row`` — ``{cell: unit}`` when the sheet genuinely mixes currencies (else
         ``{}``), which adds a per-row ``unit`` column to the Line-items table.
     """
-    base = canon_unit(meta.get("unit"))
+    raw_unit = meta.get("unit")
+    base = canon_unit(raw_unit)
     if base != "Mixed":
-        return base or "n/a", unit_display(meta.get("unit")), {}
+        return base or "n/a", unit_display(raw_unit), {}
     per_row = {it.get("label_cell"): row_unit(it.get("label"), sheet) for it in items
                if row_unit(it.get("label"), sheet)}
     seen = list(dict.fromkeys(per_row.values()))                 # distinct, in first-seen order

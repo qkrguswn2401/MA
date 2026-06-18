@@ -53,7 +53,7 @@ def dump(sheet: str, show_formulas: bool) -> None:
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:]]
+    args = sys.argv[1:]
     if not args or args[0] == "--list":
         list_sheets()
     else:

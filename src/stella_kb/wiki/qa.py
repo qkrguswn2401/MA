@@ -81,15 +81,17 @@ def is_grounded(entry: dict) -> bool:
     ans = (entry.get("answer") or "").strip()
     if not ans or ans == "(no answer)":
         return False
-    return any(e.get("cell") for e in (entry.get("evidence") or []))
+    evidence = entry.get("evidence") or []
+    return any(e.get("cell") for e in evidence)
 
 
 # --------------------------------------------------------------------------- render
 
 def _cells(entry: dict, target_page: str | None = None) -> list[str]:
     """Deduped cell refs for one entry, as ``page!cell`` (or bare ``cell`` on the target page)."""
+    evidence = entry.get("evidence") or []
     out: list[str] = []
-    for e in entry.get("evidence") or []:
+    for e in evidence:
         cell = e.get("cell")
         if not cell:
             continue
@@ -134,8 +136,11 @@ def upsert_qa_section(page_md: str, entries: list[dict], target_page: str | None
 
 def new_entry(question: str, answer: str, evidence: list[dict]) -> dict:
     """Build a sidecar entry from an agent result (trims evidence to the fields we keep)."""
-    ev = [{"page": e.get("page"), "cell": e.get("cell"), "term": e.get("term"),
-           "value": e.get("value")} for e in (evidence or []) if e.get("cell")]
+    ev = [
+        {"page": e.get("page"), "cell": e.get("cell"), "term": e.get("term"), "value": e.get("value")}
+        for e in (evidence or [])
+        if e.get("cell")
+    ]
     return {"question": question, "answer": answer, "evidence": ev,
             "created_at": date.today().isoformat()}
 
@@ -144,5 +149,6 @@ def target_page(evidence: list[dict]) -> str | None:
     """The page an answer most cites — where its compounded Q&A attaches."""
     from collections import Counter
 
-    c = Counter(e.get("page") for e in (evidence or []) if e.get("page") and e.get("cell"))
+    pages = (e.get("page") for e in (evidence or []) if e.get("page") and e.get("cell"))
+    c = Counter(pages)
     return c.most_common(1)[0][0] if c else None

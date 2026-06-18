@@ -282,6 +282,7 @@ def _value_at(g: nx.DiGraph, mid: str, sheet: str, ref: str, pid: str, value) ->
     g.add_edge(mid, cid, type="DEFINED_IN")
     return cid
 
+
 def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
     """Add Metric/Period nodes and their edges onto an existing semantic graph ``g``."""
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -303,14 +304,15 @@ def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
             g.add_edge(mid, sheet_node, type="DEFINED_IN")
 
         ws = wb[m.sheet]
+
         if m.kind == "scalar":
             val = ws[m.cell].value
             g.nodes[mid]["value"] = val
             cid = _define_in(g, mid, m.sheet, m.cell)
-            if m.id in DUAL_CASE_MGT:                  # add the frozen MGT-case counterpart
-                ec = DUAL_CASE_MGT[m.id]
-                g.nodes[mid]["value_mgt"] = wb[MGT_EXHIBIT][ec].value
-                g.nodes[mid]["cell_mgt"] = cell_id(MGT_EXHIBIT, ec)
+            if m.id in DUAL_CASE_MGT:  # add the frozen MGT-case counterpart
+                mgt_cell = DUAL_CASE_MGT[m.id]
+                g.nodes[mid]["value_mgt"] = wb[MGT_EXHIBIT][mgt_cell].value
+                g.nodes[mid]["cell_mgt"] = cell_id(MGT_EXHIBIT, mgt_cell)
             if m.period is not None:
                 g.add_edge(mid, add_period(m.period), type="HAS_VALUE", value=val, cell=cid)
 
@@ -331,16 +333,17 @@ def attach_metrics(g: nx.DiGraph, path: str) -> nx.DiGraph:
                     if yraw is None or val is None:
                         continue
                     _value_at(g, mid, m.sheet, f"{m.val_col}{r}", add_period(_year_of(yraw)), val)
-            else:  # headcount: a total row with years across the header above it
+            else:
+                # headcount: one total row (r0=38) with years in the header 32 rows above (row 6)
                 hdr = {get_column_letter(c): ws.cell(row=r0 - 32, column=c).value
-                       for c in range(4, 10)}  # row 6 holds '2019년'… for the row-38 total
+                       for c in range(4, 10)}
                 for c in range(4, 10):
+                    col_letter = get_column_letter(c)
                     val = ws.cell(row=r0, column=c).value
-                    yraw = hdr.get(get_column_letter(c))
+                    yraw = hdr.get(col_letter)
                     if val is None or yraw is None:
                         continue
-                    ref = f"{get_column_letter(c)}{r0}"
-                    _value_at(g, mid, m.sheet, ref, add_period(_year_of(yraw)), val)
+                    _value_at(g, mid, m.sheet, f"{col_letter}{r0}", add_period(_year_of(yraw)), val)
 
     _attach_fund_fees(g, wb)
     _attach_carry(g, wb)
@@ -387,7 +390,8 @@ def _attach_fund_fees(g: nx.DiGraph, wb) -> None:
         g.add_edge(cap_id, fee_id, type="DRIVES")
         g.add_edge(rate_id, fee_id, type="ASSUMPTION_OF")
         g.add_edge(fee_id, "Metric:management_fee", type="DRIVES")
-        fund_node = FUND_NODE_MAP.get(str(name).strip())
+        fund_name = str(name).strip()
+        fund_node = FUND_NODE_MAP.get(fund_name)
         if fund_node and nid("Fund", fund_node) in g:
             for mid in (rate_id, cap_id, fee_id):
                 g.add_edge(mid, nid("Fund", fund_node), type="BELONGS_TO")

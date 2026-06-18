@@ -84,31 +84,31 @@ def build_dependency_graph(path: str) -> DependencyGraph:
     Excel's cached results (node attributes). Cached values are ``None`` for cells never
     recalculated in Excel — recalc the file first if you need them populated.
     """
-    wb_f = openpyxl.load_workbook(path, data_only=False, read_only=True)
-    wb_v = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    wb_formulas = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    wb_values = openpyxl.load_workbook(path, data_only=True, read_only=True)
 
     cells: dict[str, CellInfo] = {}
     edges: list[tuple[str, str]] = []
 
-    for ws in wb_f.worksheets:
+    for ws in wb_formulas.worksheets:
         sheet = ws.title
-        vws = wb_v[sheet]
+        vs = wb_values[sheet]
         for row in ws.iter_rows():
             for c in row:
                 if not (isinstance(c.value, str) and c.value.startswith("=")):
                     continue
-                cell_id = f"{sheet}!{c.coordinate}"
+                cid = f"{sheet}!{c.coordinate}"
                 precs = parse_precedents(c.value, sheet)
-                cells[cell_id] = CellInfo(
-                    cell_id=cell_id,
+                cells[cid] = CellInfo(
+                    cell_id=cid,
                     formula=c.value,
-                    value=vws[c.coordinate].value,
+                    value=vs[c.coordinate].value,
                     precedents=precs,
                 )
-                edges.extend((p, cell_id) for p in precs)
+                edges.extend((p, cid) for p in precs)
 
-    wb_f.close()
-    wb_v.close()
+    wb_formulas.close()
+    wb_values.close()
     return DependencyGraph(cells=cells, edges=edges)
 
 
@@ -118,5 +118,5 @@ if __name__ == "__main__":
     dg = build_dependency_graph(FULL_WORKBOOK)
     print(f"formula cells: {len(dg.cells)}")
     print(f"dependency edges: {len(dg.edges)}")
-    for cell_id, info in list(dg.cells.items())[:10]:
-        print(f"  {cell_id}: {info.formula[:60]}  -> {len(info.precedents)} precedents")
+    for cid, info in list(dg.cells.items())[:10]:
+        print(f"  {cid}: {info.formula[:60]}  -> {len(info.precedents)} precedents")

@@ -54,9 +54,10 @@ def source_cells(g: nx.DiGraph, mid: str) -> list[str]:
 
 def drivers(g: nx.DiGraph, mid: str, max_depth: int = 6) -> list[tuple]:
     """Reverse DRIVES/ASSUMPTION_OF walk: what feeds ``mid``. ``[(depth, label, rel), ...]``."""
-    out, seen = [], set()
+    out: list[tuple] = []
+    seen: set[tuple] = set()
 
-    def up(node, depth):
+    def _walk_up(node: str, depth: int) -> None:
         if depth > max_depth:
             return
         for u, _, d in g.in_edges(node, data=True):
@@ -64,33 +65,34 @@ def drivers(g: nx.DiGraph, mid: str, max_depth: int = 6) -> list[tuple]:
             if rel in ("DRIVES", "ASSUMPTION_OF") and (u, node) not in seen:
                 seen.add((u, node))
                 out.append((depth, _label(g, u), rel))
-                up(u, depth + 1)
+                _walk_up(u, depth + 1)
 
-    up(mid, 0)
+    _walk_up(mid, 0)
     return out
 
 
 def evidence(g: nx.DiGraph, mid: str) -> str:
     """A compact, grounded evidence block for one metric — the only thing the LLM sees."""
     n = g.nodes[mid]
-    lines = [f"Metric: {n.get('label')} (id={name_of(mid)}, category={n.get('category')}"
-             + (f", case={n.get('case')}" if n.get("case") else "") + ")"]
+    case_suffix = f", case={n['case']}" if n.get("case") else ""
+    lines = [f"Metric: {n.get('label')} (id={name_of(mid)}, category={n.get('category')}{case_suffix})"]
     if n.get("label_ko"):
         lines.append(f"Korean label: {n['label_ko']}")
     if n.get("value") is not None:
         cells = ", ".join(source_cells(g, mid)) or "—"
-        if n.get("value_mgt") is not None:          # dual-case: show both MGT and DTT
+        if n.get("value_mgt") is not None:  # dual-case: show both DTT (active) and MGT
             case = n.get("case") or "DTT"
+            cell_mgt = n.get("cell_mgt", "—")
             lines.append(f"Value ({case} case): {n['value']}  [cells: {cells}]")
-            lines.append(f"Value (MGT case): {n['value_mgt']}  [cell: {n.get('cell_mgt', '—')}]")
+            lines.append(f"Value (MGT case): {n['value_mgt']}  [cell: {cell_mgt}]")
         else:
             lines.append(f"Value: {n['value']}  [cells: {cells}]")
     s = series(g, mid)
     if s:
         lines.append("By period:")
         for yr, val, cell in s:
-            vs = f"{val:,.1f}" if isinstance(val, (int, float)) else str(val)
-            lines.append(f"  {yr}: {vs}  [{cell}]")
+            val_str = f"{val:,.1f}" if isinstance(val, (int, float)) else str(val)
+            lines.append(f"  {yr}: {val_str}  [{cell}]")
     dr = drivers(g, mid)
     if dr:
         lines.append("Drives/assumptions feeding it (depth · label · relation):")

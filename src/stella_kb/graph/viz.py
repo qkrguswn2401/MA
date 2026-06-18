@@ -43,9 +43,14 @@ EDGE_OFF = {"INSTANCE_OF", "COVERS"}
 
 
 def to_vis(graph: dict) -> tuple[list, list]:
-    """node-link JSON -> (vis nodes, vis edges)."""
-    # semantic.py exports node-link JSON under "edges"; lift.py under "links" — accept both
+    """node-link JSON -> (vis nodes, vis edges).
+
+    Accepts both key names because semantic.py exports under ``"edges"`` while lift.py uses
+    ``"links"`` — both are valid node-link serializations.
+    """
     edge_list = graph.get("links") or graph.get("edges") or []
+
+    # degree for node sizing (in + out combined)
     deg: dict[str, int] = {}
     for e in edge_list:
         deg[e["source"]] = deg.get(e["source"], 0) + 1
@@ -53,9 +58,9 @@ def to_vis(graph: dict) -> tuple[list, list]:
 
     nodes = []
     for n in graph["nodes"]:
-        t = n.get("type", "?")
-        nid = n["id"]
-        tip = f"{t}: {n.get('label', nid)}"
+        node_type = n.get("type", "?")
+        node_id = n["id"]
+        tip = f"{node_type}: {n.get('label', node_id)}"
         if n.get("sheet"):
             tip += f"<br>sheet: {n['sheet']}"
         if n.get("cell"):
@@ -63,19 +68,26 @@ def to_vis(graph: dict) -> tuple[list, list]:
         if n.get("role"):
             tip += f"<br>role: {n['role']}"
         nodes.append({
-            "id": nid, "label": n.get("label", nid), "group": t, "title": tip,
-            "value": 1 + deg.get(nid, 0), "color": COLORS.get(t, "#888"),
-            "hidden": t in DEFAULT_OFF,
+            "id": node_id,
+            "label": n.get("label", node_id),
+            "group": node_type,
+            "title": tip,
+            "value": 1 + deg.get(node_id, 0),
+            "color": COLORS.get(node_type, "#888"),
+            "hidden": node_type in DEFAULT_OFF,
         })
 
     edges = []
     for e in edge_list:
-        et = e.get("type", "?")
+        edge_type = e.get("type", "?")
         edges.append({
-            "from": e["source"], "to": e["target"], "etype": et,
-            "title": et, "arrows": "to",
-            "hidden": et in EDGE_OFF,
-            "color": {"color": "#ff8c42", "opacity": 0.9} if et == "DEPENDS_ON"
+            "from": e["source"],
+            "to": e["target"],
+            "etype": edge_type,
+            "title": edge_type,
+            "arrows": "to",
+            "hidden": edge_type in EDGE_OFF,
+            "color": {"color": "#ff8c42", "opacity": 0.9} if edge_type == "DEPENDS_ON"
                      else {"color": "#3a3f4a", "opacity": 0.5},
         })
     return nodes, edges
@@ -83,23 +95,23 @@ def to_vis(graph: dict) -> tuple[list, list]:
 
 def render(graph: dict, title: str = "Semantic Graph") -> str:
     nodes, edges = to_vis(graph)
-    ntypes = sorted({n["group"] for n in nodes})
-    etypes = sorted({e["etype"] for e in edges})
+    node_types = sorted({n["group"] for n in nodes})
+    edge_types = sorted({e["etype"] for e in edges})
     legend = " ".join(
         f'<span class="lg"><i style="background:{COLORS.get(t, "#888")}"></i>{t}</span>'
-        for t in ntypes)
-    ncb = "".join(
+        for t in node_types)
+    node_checkboxes = "".join(
         f'<label><input type="checkbox" data-ntype="{t}" '
-        f'{"" if t in DEFAULT_OFF else "checked"}> {t}</label>' for t in ntypes)
-    ecb = "".join(
+        f'{"" if t in DEFAULT_OFF else "checked"}> {t}</label>' for t in node_types)
+    edge_checkboxes = "".join(
         f'<label><input type="checkbox" data-etype="{t}" '
-        f'{"" if t in EDGE_OFF else "checked"}> {t}</label>' for t in etypes)
+        f'{"" if t in EDGE_OFF else "checked"}> {t}</label>' for t in edge_types)
 
     return _TEMPLATE.format(
         title=title,
         nodes=json.dumps(nodes, ensure_ascii=False),
         edges=json.dumps(edges, ensure_ascii=False),
-        legend=legend, ncb=ncb, ecb=ecb,
+        legend=legend, ncb=node_checkboxes, ecb=edge_checkboxes,
         n=len(nodes), e=len(edges))
 
 

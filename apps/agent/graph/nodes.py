@@ -135,7 +135,7 @@ def _rec(sub: int, seq: int, agent: str, action: str, arg: str, thought: str) ->
 # --------------------------------------------------------------------------- planner
 def planner_node(state: AgentState) -> AgentState:
     """Break the question into a minimal list of sub-questions (each fans out to a branch)."""
-    user = f"INDEX:\n{state['index_md']}\n\nQuestion: {state['question']}\n\n" "Return the plan JSON."
+    user = f"INDEX:\n{state['index_md']}\n\nQuestion: {state['question']}\n\nReturn the plan JSON."
     act, _ = _ask(PLANNER, user, 600)
     plan = [p for p in ((act or {}).get("plan") or []) if isinstance(p, dict) and p.get("ask")]
     if not plan:  # parse miss / empty → fall back to a single pass-through sub-question
@@ -215,8 +215,8 @@ def _route(sub: dict, tried: list, index: dict, index_md: str,
                 picks.append(m)
         rthought = (act or {}).get("thought", "")
 
-    picks = picks[:top_k]  # cap the router's page PICKS (recall/cost knob); a trace sub-Q then
-    path = None            # appends DAG chain pages below, so trace mode can exceed top_k by design
+    picks = picks[:top_k]  # cap the router's page picks (recall/cost knob)
+    path = None            # populated below for trace-mode sub-questions; intentionally None here
     if sub.get("mode") == "trace" and picks:
         direction = sub.get("direction", "down")
         chain = trace_links(index, picks[0], direction=direction)
@@ -261,7 +261,7 @@ def _retrieve(ask: str, pages: list, wiki_dir: str | None = None,
     llm_pages = [p for p in pages if p not in det]
 
     def extract(page: str) -> list:
-        user = f"Sub-question: {ask}\n\nWIKI PAGE:\n{texts[page]}\n\n" "Return the evidence JSON."
+        user = f"Sub-question: {ask}\n\nWIKI PAGE:\n{texts[page]}\n\nReturn the evidence JSON."
         # Pages now carry full raw grids (matrices/dense tables), so a multi-cell answer can
         # need many evidence rows — give the extractor headroom so its JSON isn't truncated.
         act, _ = _ask(system=RETRIEVER, user=user, max_tokens=1500)
@@ -290,7 +290,7 @@ def _retrieve(ask: str, pages: list, wiki_dir: str | None = None,
     if llm_pages:
         with ThreadPoolExecutor(max_workers=min(_FANOUT, len(llm_pages))) as ex:
             per_page = list(ex.map(extract, llm_pages))
-    ev = [e for page_ev in per_page for e in page_ev] + [e for p in det for e in det[p]]
+    ev = [e for page_ev in per_page for e in page_ev] + [e for evlist in det.values() for e in evlist]
     det_note = f" ({len(det)} page(s) deterministic)" if det else ""
     return ev, f"{len(ev)} fact(s) from {pages}{det_note}"
 
