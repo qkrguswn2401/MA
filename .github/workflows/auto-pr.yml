@@ -1,0 +1,54 @@
+name: auto-pr
+
+# Open a pull request automatically whenever a feature-style branch is pushed, so pushing a
+# branch is the only step. Uses the built-in GITHUB_TOKEN (no PAT / no local credential), and
+# is a no-op if a PR for the branch already exists. The PR title/body come from the branch's
+# latest commit message.
+#
+# One-time repo setting required: Settings → Actions → General → Workflow permissions →
+# enable "Allow GitHub Actions to create and approve pull requests" (else gh pr create 403s).
+
+on:
+  push:
+    branches:
+      - 'feat/**'
+      - 'fix/**'
+      - 'refactor/**'
+      - 'perf/**'
+      - 'docs/**'
+      - 'chore/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history so the commit message is available
+
+      - name: Open a PR for this branch (skip if one exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # No-op if a PR already targets this branch.
+          if gh pr view "$BRANCH" --json number --jq '.number' >/dev/null 2>&1; then
+            echo "PR already exists for $BRANCH — nothing to do."
+            exit 0
+          fi
+
+          title="$(git log -1 --pretty=%s)"
+          body="$(git log -1 --pretty=%b)"
+          [ -n "$body" ] || body="Automated PR for \`$BRANCH\`."
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "$title" \
+            --body "$body"
