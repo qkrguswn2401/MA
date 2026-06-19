@@ -45,6 +45,44 @@ def chat(messages: list[dict], temperature: float = 0.0, max_tokens: int = 512,
     return data["choices"][0]["message"]["content"]
 
 
+def chat_stream(messages: list[dict], temperature: float = 0.0, max_tokens: int = 512,
+                timeout: float = 120.0):
+    """Streaming :func:`chat` — yields assistant content deltas as the model emits them.
+
+    Uses the OpenAI-compatible ``stream: true`` SSE protocol: the server sends ``data: {json}``
+    lines, each with a ``choices[0].delta.content`` fragment, terminated by ``data: [DONE]``.
+    Stdlib only (urllib reads the chunked response line by line). The buffered :func:`chat` stays
+    the default; this is for the one place streaming pays off — the final user-facing answer
+    (the apps.agent synthesizer), so it appears token by token instead of all at once.
+    """
+    payload = json.dumps({
+        "model": MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }).encode()
+    req = urllib.request.Request(
+        f"{BASE_URL}/chat/completions", data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        for raw_line in r:
+            line = raw_line.strip()
+            if not line.startswith(b"data:"):
+                continue
+            data = line[len(b"data:"):].strip()
+            if data == b"[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+            except (ValueError, json.JSONDecodeError):
+                continue  # skip keep-alive / non-JSON lines
+            delta = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
+            if delta:
+                yield delta
+
+
 def cached_chat(messages: list[dict], *, cache_dir: str, temperature: float = 0.0,
                 max_tokens: int = 512, timeout: float = 60.0) -> str:
     """Disk-cached :func:`chat` — same return, but reproducible across reruns for the same

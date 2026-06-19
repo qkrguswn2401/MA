@@ -1,4 +1,4 @@
-"""The LangGraph state for the planner → (fan-out) solve → synthesizer pipeline.
+"""The LangGraph state for the planner → (fan-out) solve → auditor pipeline.
 
 The planner splits the question into sub-questions; each is dispatched to its own ``solve``
 branch via the ``Send`` API and they run **concurrently** (bounded by a semaphore in
@@ -28,7 +28,7 @@ class AgentState(TypedDict, total=False):
     evidence: Annotated[list, operator.add]  # accumulated [{page, cell, term, value, ask}]
     paths: Annotated[list, operator.add]     # provenance chains [{ask, direction, chain:[...]}]
     caveats: list          # auditor's cross-evidence red flags (single write, post-merge)
-    answer: str            # the synthesizer's final Korean answer
+    answer: str            # final Korean answer — written by nodes.synthesize() AFTER the graph
     trace: Annotated[list, operator.add]     # per-turn record [{step, sub, agent, action, arg, thought}]
     steps: Annotated[int, operator.add]      # retriever reads consumed across branches (work done)
     max_steps: int         # per-branch read budget: initial read + up to (max_steps-1) retries

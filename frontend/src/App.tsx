@@ -48,8 +48,12 @@ export default function App() {
       askStream(question, 8, {
         onStep: (s: TraceStep) =>
           patchBot(botId, (t) => ({ ...t, trace: [...t.trace, s] })),
+        onToken: (text) =>
+          // append each fragment so the answer materializes live (status stays "thinking";
+          // the spinner hides as soon as text is non-empty, the bubble renders progressively)
+          patchBot(botId, (t) => ({ ...t, text: t.text + text })),
         onAnswer: (answer) =>
-          patchBot(botId, (t) => ({ ...t, text: answer || "(답변 없음)", status: "done" })),
+          patchBot(botId, (t) => ({ ...t, text: answer || t.text || "(답변 없음)", status: "done" })),
         onError: (detail) =>
           patchBot(botId, (t) =>
             // only surface the error if no answer landed first

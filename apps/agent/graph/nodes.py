@@ -1,11 +1,13 @@
-"""The agent pipeline: planner → (fan-out) solve → synthesizer.
+"""The agent pipeline: planner → (fan-out) solve → auditor, then synthesize() outside the graph.
 
 The planner splits the question; each sub-question is dispatched to its own ``solve`` branch
 (LangGraph ``Send``) and the branches run **concurrently**. A ``solve`` branch runs the three
 sub-agents that used to be separate nodes — router → retriever → verifier — as a plain Python
 retry loop, emitting their trace entries so all five personas stay visible. The retriever
-itself fans out one LLM call per page. Every LLM call passes through ``_LLM_SEM`` so no more
-than ``STELLA_FANOUT`` (default 4) requests hit the shared vLLM at once.
+itself fans out one LLM call per page. The graph ends at the ``auditor``; the final answer is
+written by ``synthesize``/``synthesize_stream`` *after* the graph (called from ``core``) so it
+can be streamed token by token. Every LLM call passes through ``_LLM_SEM`` so no more than
+``STELLA_FANOUT`` (default 4) requests hit the shared vLLM at once.
 
 The deterministic wiki reads (``lookup``/``open_page``/``trace_links``) do all retrieval — the
 LLMs only route and write prose. The shared vLLM has no native tool-calling, hence the
@@ -17,10 +19,11 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 from src.stella_kb import config
-from src.stella_kb.llm import chat
+from src.stella_kb.llm import chat, chat_stream
 
 from ..io import (
     cross_ref_partners,
@@ -84,31 +87,6 @@ def parse_action(raw: str) -> dict | None:
         return json.loads(s[start : end + 1])
     except (ValueError, json.JSONDecodeError):
         return None
-
-
-def _salvage_text(raw: str) -> str | None:
-    """Recover the ``text`` field from a malformed/truncated synthesizer JSON.
-
-    When ``parse_action`` fails (e.g. a long ``thought`` ran past ``max_tokens`` before the
-    JSON closed), this walks the ``"text": "..."`` value honoring backslash escapes so a
-    truncated trailing field doesn't matter. Returns None if no recoverable text field is
-    present — the caller then emits a clean message instead of leaking the raw ``{"thought":…}``
-    skeleton to the user (the CE-01 failure)."""
-    m = re.search(r'"text"\s*:\s*"', raw)
-    if not m:
-        return None
-    out, i = [], m.end()
-    while i < len(raw):
-        ch = raw[i]
-        if ch == "\\" and i + 1 < len(raw):
-            out.append({"n": "\n", "t": "\t", "r": "\r"}.get(raw[i + 1], raw[i + 1]))
-            i += 2
-            continue
-        if ch == '"':
-            break
-        out.append(ch)
-        i += 1
-    return "".join(out).strip() or None
 
 
 def _ask(system: str, user: str, max_tokens: int) -> tuple[dict | None, str]:
@@ -452,8 +430,17 @@ def auditor_node(state: AgentState, index: dict) -> AgentState:
 
 
 # ----------------------------------------------------------------------- synthesizer
-def synthesizer_node(state: AgentState) -> AgentState:
-    """Write the final cited Korean answer from the accumulated evidence + traced paths."""
+# The synthesizer is NOT a graph node — the graph ends at the auditor. Synthesis runs after the
+# graph so the final answer can be **streamed** token by token (LangGraph would only hand back the
+# node's state once the whole answer is already generated). Both the buffered ``run`` path and the
+# SSE ``stream_run`` path build the same prompt via ``_synth_user`` and call the same model; the
+# prompt now returns plain Korean prose (no JSON wrapper), so its tokens stream straight to the user.
+
+_SYNTH_FALLBACK = "evidence는 수집되었으나 최종 답변 정리에 실패했습니다."
+
+
+def _synth_user(state: AgentState) -> str:
+    """Build the synthesizer user prompt from the merged evidence, traced paths, and audit caveats."""
     ev = state.get("evidence", [])
     ev_txt = (
         "\n".join(f"- [{e['ask']}] {e['term']}{_per(e)} = {e['value']}  ({e['cell']}, page {e['page']})" for e in ev)
@@ -476,16 +463,41 @@ def synthesizer_node(state: AgentState) -> AgentState:
         ("\n\n감사 경고(AUDIT — 반드시 반영, 무시 금지):\n" + "\n".join(f"- {c}" for c in caveats)) if caveats else ""
     )
 
-    user = (
+    return (
         f"Question: {state['question']}\n\nEvidence collected from the wiki:\n{ev_txt}"
-        f"{path_block}{caveat_block}\n\nWrite the final answer JSON."
+        f"{path_block}{caveat_block}\n\n최종 답변을 작성하세요."
     )
-    act, raw = _ask(SYNTHESIZER, user, 900)
-    # never fall back to `raw` — a parse miss must not leak the {"thought":…} JSON skeleton
-    # to the user; salvage the text field, else emit a clean message.
-    text = (act or {}).get("text") or _salvage_text(raw) or ""
-    text = text.strip() or "evidence는 수집되었으나 최종 답변 정리에 실패했습니다."
-    return {
-        "answer": text,
-        "trace": [_rec(_SYNTH_ORDER, 0, "synthesizer", "answer", "", (act or {}).get("thought", ""))],
-    }
+
+
+def _synth_trace() -> dict:
+    """The synthesizer's trace record (sorts last via ``_SYNTH_ORDER``)."""
+    return _rec(_SYNTH_ORDER, 0, "synthesizer", "answer", "", "")
+
+
+def synthesize(state: AgentState) -> tuple[str, dict]:
+    """Buffered final answer: ``(answer_text, trace_record)``. Used by the non-streaming
+    ``run``/``arun`` and the eval. Prose out — no JSON parsing, so nothing to salvage."""
+    with _LLM_SEM:
+        raw = chat(
+            [{"role": "system", "content": SYNTHESIZER},
+             {"role": "user", "content": _synth_user(state)}],
+            max_tokens=900, timeout=120.0,
+        )
+    return (raw or "").strip() or _SYNTH_FALLBACK, _synth_trace()
+
+
+def synthesize_stream(state: AgentState) -> Iterator[str]:
+    """Stream the final answer as text deltas (token level). Same prompt/model as
+    :func:`synthesize`; the SSE path joins these into the canonical answer. Holds ``_LLM_SEM``
+    for the one in-flight request, like every other model call."""
+    with _LLM_SEM:
+        emitted = False
+        for delta in chat_stream(
+            [{"role": "system", "content": SYNTHESIZER},
+             {"role": "user", "content": _synth_user(state)}],
+            max_tokens=900, timeout=120.0,
+        ):
+            emitted = True
+            yield delta
+        if not emitted:  # empty generation → at least surface the fallback
+            yield _SYNTH_FALLBACK

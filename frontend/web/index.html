@@ -259,12 +259,23 @@
         scroll();
       });
 
+      let answerText = ""; // accumulates streamed token fragments
+      es.addEventListener("token", e => {
+        const d = JSON.parse(e.data);
+        answerText += d.text || "";
+        think.remove();
+        trace.open = false; // collapse once the answer starts streaming
+        bot.bubble.style.display = "";
+        bot.bubble.innerHTML = render(answerText); // re-render the growing answer
+        scroll();
+      });
+
       es.addEventListener("answer", e => {
         const d = JSON.parse(e.data);
         think.remove();
         trace.open = false; // collapse once answered; user can re-expand
         bot.bubble.style.display = "";
-        bot.bubble.innerHTML = render(d.answer || "(답변 없음)");
+        bot.bubble.innerHTML = render(d.answer || answerText || "(답변 없음)");
         scroll();
       });
 

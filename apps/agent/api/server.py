@@ -162,7 +162,8 @@ async def ask_stream(
 
     Inputs are query parameters (the browser drives this with ``EventSource``, which is GET-only
     and can't send a body). Emits one ``step`` event per agent decision (which page it opens and
-    why), a final ``answer`` event, then ``done``. Consume with an EventSource (browser) or
+    why), then the answer streamed as ``token`` events (one fragment each), a final ``answer``
+    event with the joined text, then ``done``. Consume with an EventSource (browser) or
     ``curl -N localhost:5001/ask/stream?question=...``.
     """
     if not question.strip():

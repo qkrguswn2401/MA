@@ -36,6 +36,7 @@ export async function getDatasets(): Promise<DatasetsInfo> {
 
 export interface StreamHandlers {
   onStep?: (s: TraceStep) => void;
+  onToken?: (text: string) => void;
   onAnswer?: (answer: string, steps: number) => void;
   onError?: (detail: string) => void;
   onDone?: () => void;
@@ -44,7 +45,8 @@ export interface StreamHandlers {
 /**
  * Open an SSE stream to /ask/stream and dispatch events. The backend emits:
  *   event: step   -> TraceStep
- *   event: answer -> { answer, steps }
+ *   event: token  -> { text }            // one answer fragment, streamed in order
+ *   event: answer -> { answer, steps }   // the joined final answer (last)
  *   event: error  -> { detail }
  *   event: done   -> {}
  * Returns a cancel function that closes the EventSource.
@@ -61,6 +63,10 @@ export function askStream(
 
   es.addEventListener("step", (e) => {
     h.onStep?.(JSON.parse((e as MessageEvent).data) as TraceStep);
+  });
+  es.addEventListener("token", (e) => {
+    const d = JSON.parse((e as MessageEvent).data) as { text: string };
+    h.onToken?.(d.text);
   });
   es.addEventListener("answer", (e) => {
     const d = JSON.parse((e as MessageEvent).data) as { answer: string; steps: number };

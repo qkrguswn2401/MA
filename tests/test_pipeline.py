@@ -93,7 +93,8 @@ def test_compiled_app_supports_async_drive(index):
 
 def _stub_ask(system, user, max_tokens):
     """Deterministic LLM stub so the async vs sync drive can be compared without the vLLM.
-    Branches on which prompt is passed (planner/router/verifier/synthesizer)."""
+    Branches on which prompt is passed (planner/router/verifier). Synthesis no longer goes
+    through ``_ask`` — it streams via ``chat``/``chat_stream``, stubbed separately below."""
     from apps.agent.graph import nodes
 
     if system == nodes.PLANNER:
@@ -102,8 +103,6 @@ def _stub_ask(system, user, max_tokens):
         return {"pages": [], "thought": "t"}, "raw"          # no pages → no retriever LLM call
     if system == nodes.VERIFIER:
         return {"verdict": "ok", "reason": "r"}, "raw"        # no retry
-    if system == nodes.SYNTHESIZER:
-        return {"text": "FIXED-ANSWER", "thought": "t"}, "raw"
     return {}, "raw"
 
 
@@ -114,6 +113,7 @@ def test_async_run_matches_sync_run(index, monkeypatch):
     from apps.agent.graph import nodes
 
     monkeypatch.setattr(nodes, "_ask", _stub_ask)
+    monkeypatch.setattr(nodes, "chat", lambda *a, **k: "FIXED-ANSWER")  # buffered synthesize()
     sync = core.run("Q", index=index)
     asy = asyncio.run(core.arun("Q", index=index))
     assert sync["answer"] == asy["answer"] == "FIXED-ANSWER"
@@ -128,6 +128,8 @@ def test_async_stream_matches_sync_stream(index, monkeypatch):
     from apps.agent.graph import nodes
 
     monkeypatch.setattr(nodes, "_ask", _stub_ask)
+    # synthesize_stream() yields these fragments; the SSE path joins them into the answer
+    monkeypatch.setattr(nodes, "chat_stream", lambda *a, **k: iter(["FIXED-", "ANSWER"]))
     sync_ev = list(core.stream_run("Q", index=index))
 
     async def collect():
@@ -135,7 +137,9 @@ def test_async_stream_matches_sync_stream(index, monkeypatch):
 
     asy_ev = asyncio.run(collect())
     assert [e["type"] for e in sync_ev] == [e["type"] for e in asy_ev]
-    assert sync_ev[-1]["type"] == "answer" and sync_ev[-1]["answer"] == asy_ev[-1]["answer"]
+    assert [e["text"] for e in sync_ev if e["type"] == "token"] == ["FIXED-", "ANSWER"]
+    assert sync_ev[-1]["type"] == "answer"
+    assert sync_ev[-1]["answer"] == asy_ev[-1]["answer"] == "FIXED-ANSWER"
 
 
 # --- curated first-layer deck override (decks.yaml) -----------------------------------
