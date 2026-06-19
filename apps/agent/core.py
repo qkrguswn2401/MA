@@ -50,8 +50,10 @@ def answer(question: str, source: str = "auto", max_steps: int = 3,
     ``store`` selects the wiki dataset (ignored by the DART backend, which has no wiki).
     ``save=True`` compounds a grounded wiki answer back onto its page (no-op for DART).
     Returns ``{source, answer, trace, steps}`` — same shape for both backends."""
-    src = route(question) if source == "auto" else source
-    if src == "dart":
+    if source == "auto":
+        from .supervisor import run_supervised  # handoff-tool supervisor (wiki + DART as tools)
+        return run_supervised(question, store=store)
+    if source == "dart":
         from .dart_agent import run_dart
         return {"source": "dart", **run_dart(question)}
     return {"source": "wiki",
@@ -190,10 +192,13 @@ async def arun(question: str, max_steps: int = 3, verbose: bool = False,
 async def aanswer(question: str, source: str = "auto", max_steps: int = 3,
                   verbose: bool = False, index: dict | None = None,
                   store: Any = None) -> dict[str, Any]:
-    """Async twin of :func:`answer`: route (or honor ``source``) and dispatch. The sync backends
-    (``route`` classifier, DART tool agent) run via ``to_thread`` so they don't block the loop."""
-    src = (await asyncio.to_thread(route, question)) if source == "auto" else source
-    if src == "dart":
+    """Async twin of :func:`answer`: dispatch by ``source``. ``"auto"`` runs the handoff-tool
+    supervisor (wiki + DART as tools); explicit ``"wiki"``/``"dart"`` go straight to that
+    backend (the sync DART agent runs via ``to_thread`` so it doesn't block the loop)."""
+    if source == "auto":
+        from .supervisor import arun_supervised  # handoff-tool supervisor (wiki + DART as tools)
+        return await arun_supervised(question, store=store)
+    if source == "dart":
         from .dart_agent import run_dart
         return {"source": "dart", **(await asyncio.to_thread(run_dart, question))}
     return {"source": "wiki",
@@ -232,11 +237,19 @@ def stream_run(question: str, max_steps: int = 3, index: dict | None = None, sto
 
 
 async def astream_run(question: str, max_steps: int = 3, index: dict | None = None,
-                      store: Any = None):
+                      store: Any = None, source: str = "wiki"):
     """Async twin of :func:`stream_run` — an async generator over ``app.astream`` so the SSE
     endpoint can stream without pinning a threadpool thread for the connection's lifetime. Emits
     the same ``step``/``token``/``answer`` event dicts; LangGraph runs the sync nodes in its
-    executor, and the blocking token stream runs in a worker thread via ``_aiter_in_thread``."""
+    executor, and the blocking token stream runs in a worker thread via ``_aiter_in_thread``.
+
+    ``source="auto"`` delegates to the handoff-tool supervisor (``supervisor.astream_supervised``),
+    which yields the same event shape; ``"wiki"`` (the default) streams the wiki graph directly."""
+    if source == "auto":
+        from .supervisor import astream_supervised
+        async for ev in astream_supervised(question, store=store):
+            yield ev
+        return
     app = build_app(_resolve_index(store, index))
     emitted = 0
     final: dict[str, Any] = {}

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 class TraceStep(BaseModel):
     step: int
-    agent: str  # which pipeline agent ran: planner|router|retriever|verifier|synthesizer
+    agent: str  # which agent ran: planner|router|retriever|verifier|synthesizer|supervisor|wiki:*|dart:*
     action: str
     arg: str
     thought: str
@@ -24,7 +24,7 @@ class AskResponse(BaseModel):
     question: str
     answer: str
     steps: int
-    source: str = "wiki"  # which backend answered: wiki | dart
+    source: str = "wiki"  # which backend(s) answered: wiki | dart | dart+wiki | supervisor
     dataset: str | None = None  # which wiki dataset answered (None for the dart backend)
     trace: list[TraceStep] | None = None
 
