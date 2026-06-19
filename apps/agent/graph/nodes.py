@@ -114,7 +114,7 @@ def _rec(sub: int, seq: int, agent: str, action: str, arg: str, thought: str) ->
 def planner_node(state: AgentState) -> AgentState:
     """Break the question into a minimal list of sub-questions (each fans out to a branch)."""
     user = f"INDEX:\n{state['index_md']}\n\nQuestion: {state['question']}\n\nReturn the plan JSON."
-    act, _ = _ask(PLANNER, user, 600)
+    act, _ = _ask(PLANNER, user, 400)
     plan = [p for p in ((act or {}).get("plan") or []) if isinstance(p, dict) and p.get("ask")]
     if not plan:  # parse miss / empty → fall back to a single pass-through sub-question
         plan = [{"ask": state["question"], "hint_terms": []}]
