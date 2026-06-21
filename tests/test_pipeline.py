@@ -6,8 +6,8 @@ import operator
 import typing
 
 from apps.agent.core import _renumber
-from apps.agent.graph import build_app
-from apps.agent.graph.state import AgentState
+from apps.agent.agents.wiki import build_app
+from apps.agent.agents.wiki.state import AgentState
 
 
 # --- reducer channels: the parallel branches must MERGE, not overwrite -----------------
@@ -95,7 +95,7 @@ def _stub_ask(system, user, max_tokens):
     """Deterministic LLM stub so the async vs sync drive can be compared without the vLLM.
     Branches on which prompt is passed (planner/router/verifier). Synthesis no longer goes
     through ``_ask`` — it streams via ``chat``/``chat_stream``, stubbed separately below."""
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     if system == nodes.PLANNER:
         return {"plan": [{"ask": "Q", "hint_terms": []}], "thought": "t"}, "raw"
@@ -110,7 +110,7 @@ def test_async_run_matches_sync_run(index, monkeypatch):
     import asyncio
 
     from apps.agent import core
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     monkeypatch.setattr(nodes, "_ask", _stub_ask)
     monkeypatch.setattr(nodes, "chat", lambda *a, **k: "FIXED-ANSWER")  # buffered synthesize()
@@ -125,7 +125,7 @@ def test_async_stream_matches_sync_stream(index, monkeypatch):
     import asyncio
 
     from apps.agent import core
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     monkeypatch.setattr(nodes, "_ask", _stub_ask)
     # synthesize_stream() yields these fragments; the SSE path joins them into the answer
@@ -214,7 +214,7 @@ _ROUTE_IDX = {"pages": {"WACC 페이지": {}}, "alias_index": {}}
 
 
 def test_route_curated_hit_skips_router_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     monkeypatch.setattr(nodes, "route_lookup", lambda hints, idx, wd: ["WACC 페이지"])
     monkeypatch.setattr(nodes, "_ask",
@@ -225,7 +225,7 @@ def test_route_curated_hit_skips_router_llm(monkeypatch):
 
 
 def test_route_retry_bypasses_shortcut_and_calls_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     # even if the table would hit, a retry (tried non-empty) must diverge via the LLM router
     monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: ["WACC 페이지"])
@@ -240,7 +240,7 @@ _CX_IDX = {"pages": {"FDD1": {"source": "PDF", "derives_from": [{"page": "E1", "
 
 
 def test_route_cross_ref_pairing_on(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_cross_ref_pairing", lambda: True)
@@ -254,7 +254,7 @@ def test_route_cross_ref_pairing_on(monkeypatch):
 
 
 def test_route_no_cross_ref_pairing_when_off(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_cross_ref_pairing", lambda: False)
@@ -267,7 +267,7 @@ def test_route_no_cross_ref_pairing_when_off(monkeypatch):
 
 
 def test_route_miss_falls_back_to_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
 
     monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: [])  # no curated hit
     monkeypatch.setattr(nodes, "_ask", lambda *a, **k: ({"pages": ["WACC 페이지"]}, "raw"))
@@ -282,7 +282,7 @@ _MULTI_IDX = {"pages": {f"P{i}": {} for i in range(6)}, "alias_index": {}}
 
 
 def test_router_opens_up_to_top_k_pages(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_router_top_k", lambda: 4)
@@ -296,7 +296,7 @@ def test_router_opens_up_to_top_k_pages(monkeypatch):
 
 
 def test_router_cap_also_bounds_curated_routes(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.agents.wiki import nodes
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_router_top_k", lambda: 2)

@@ -30,12 +30,25 @@ fi
 [ -n "${DART_MCP_TOKEN:-}" ] && echo "    DART_MCP_TOKEN loaded (dart backend enabled)" \
                              || echo "    DART_MCP_TOKEN unset (dart backend will 503; wiki unaffected)"
 
-echo "==> checking wiki artifacts ..."
-if [ ! -f data/wiki/index.json ]; then
-  echo "    !! data/wiki/index.json missing — build the wiki first: ./run_pipeline.sh"
-  exit 1
-fi
-echo "    data/wiki present ($(ls data/wiki/pages/*.md 2>/dev/null | wc -l | tr -d ' ') pages)"
+# Check every registered dataset wiki (config.yaml agent.datasets); we serve all of them
+# (v0.1 + v0.2). Parse the `datasets:` block: lines like "    v0.1: data/v0.1/wiki  # ...".
+echo "==> checking wiki artifacts (config.yaml agent.datasets) ..."
+WIKI_DIRS="$(awk '
+  /^  datasets:/      {indata=1; next}
+  indata && /^  [^ ]/ {indata=0}
+  indata && /^    [^ ]/ {sub(/#.*/,""); sub(/^[^:]*:[[:space:]]*/,""); gsub(/[[:space:]]/,""); if($0) print}
+' config.yaml)"
+[ -n "$WIKI_DIRS" ] || WIKI_DIRS="data/v0.1/wiki"
+missing=0
+for WIKI_DIR in $WIKI_DIRS; do
+  if [ ! -f "$WIKI_DIR/index.json" ]; then
+    echo "    !! $WIKI_DIR/index.json missing — build it: ./run_pipeline.sh"
+    missing=1
+  else
+    echo "    $WIKI_DIR present ($(ls "$WIKI_DIR"/pages/*.md 2>/dev/null | wc -l | tr -d ' ') pages)"
+  fi
+done
+[ "$missing" = 0 ] || exit 1
 
 echo "==> checking vLLM endpoint (123.37.5.219:8001) ..."
 if curl -sf --max-time 8 123.37.5.219:8001/v1/models >/dev/null; then

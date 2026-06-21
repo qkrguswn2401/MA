@@ -85,13 +85,15 @@ src/stella_kb/
                           #   compile re-renders it each rebuild so it survives. Gate: answer must cite ≥1 cell
   parsers/pdf/            # vision PDF parser (describe/vision/tables/router); emits tables + [그래프]/[다이어그램]
 apps/agent/               # query agent (separate from the build pipeline)
-  core.py                 # public API: run / ask / answer(router) / stream_run  — takes a dataset `store`
-                          #   run/answer(save=True) compounds a grounded answer onto its page (io.persist_answer)
+  core.py                 # public API / facade: run / ask / answer(router) / stream_run — takes a dataset `store`;
+                          #   dispatches to the agents/ backends. run/answer(save=True) compounds onto the page
   datasets.py             # dataset (wiki VERSION) registry + cached WikiStore  (id -> wiki dir)
+  agents/                 # the agent backends (core dispatches here)
+    supervisor.py         #   supervisor StateGraph: routes/merges wiki+dart worker nodes; streaming fast-path
+    dart_agent.py         #   DART tool-calling backend (public-company questions)
+    wiki/                 #   wiki LangGraph: state/nodes/build  (wiki_dir threaded through state, not a global)
   io/tools.py             # deterministic wiki access (lookup/open_page/query_ledger/trace_links); per-request wiki_dir
-  graph/                  # LangGraph: state/nodes/build  (wiki_dir threaded through state, not a global)
   api/                    # FastAPI: /ask (GET) · /ask/stream (GET SSE) · /datasets · /health  + schema/ (pydantic)
-  dart_agent.py           # DART tool-calling backend (public-company questions)
 frontend/                 # React+Vite chat UI; components/DatasetPicker selects wiki version; proxies API -> :5001
 eval/
   stella_crosscheck.py    # v0.1 tier-based PDF×Excel cross-check (20 Q)

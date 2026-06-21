@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.agent.graph.nodes import parse_action
+from apps.agent.agents.wiki.nodes import parse_action
 from apps.agent.io import (
     cross_ref_partners,
     extract_page_items,

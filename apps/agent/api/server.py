@@ -89,6 +89,12 @@ def _vllm_up() -> bool:
         return False
 
 
+async def _require_llm() -> None:
+    """Raise 503 if the vLLM endpoint is unreachable (offloads the blocking probe to a thread)."""
+    if not await asyncio.to_thread(_vllm_up):
+        raise HTTPException(status_code=503, detail=f"LLM endpoint {BASE_URL} unreachable")
+
+
 @app.get("/health")
 def health() -> dict:
     """Liveness + dependency check: wiki artifacts present and the vLLM reachable."""
@@ -107,7 +113,7 @@ def health() -> dict:
 
 def _dataset_status() -> dict:
     """``{id: built?}`` over every registered dataset — for /health and /datasets."""
-    return {ds: datasets.WikiStore(ds).exists() for ds in datasets.available()}
+    return {ds: datasets.get_store(ds).exists() for ds in datasets.available()}
 
 
 @app.get("/datasets")
@@ -136,8 +142,8 @@ async def ask_endpoint(
         raise HTTPException(status_code=422, detail="question must not be empty")
     # auto/wiki need the guest vLLM (routing + wiki retrieval run on it); dart uses its own
     # endpoints (the tool LLM on :8001 + the DART MCP server) and degrades to an error answer.
-    if source != "dart" and not await asyncio.to_thread(_vllm_up):
-        raise HTTPException(status_code=503, detail=f"LLM endpoint {BASE_URL} unreachable")
+    if source != "dart":
+        await _require_llm()
     # The dart backend has no wiki, so only resolve a dataset for wiki/auto requests.
     store = None if source == "dart" else _resolve_store(dataset)
     result = await aanswer(question, source=source, max_steps=max_steps, store=store)
@@ -170,8 +176,7 @@ async def ask_stream(
     """
     if not question.strip():
         raise HTTPException(status_code=422, detail="question must not be empty")
-    if not await asyncio.to_thread(_vllm_up):
-        raise HTTPException(status_code=503, detail=f"LLM endpoint {BASE_URL} unreachable")
+    await _require_llm()
     store = _resolve_store(dataset)
 
     async def gen():

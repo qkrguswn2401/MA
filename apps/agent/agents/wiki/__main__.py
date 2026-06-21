@@ -1,8 +1,8 @@
 """Visualize the agent's LangGraph structure.
 
-    python -m apps.agent.graph                 # print Mermaid to stdout
-    python -m apps.agent.graph --out FILE.mmd  # also write the Mermaid source
-    python -m apps.agent.graph --png FILE.png  # render a PNG (needs network: mermaid.ink)
+    python -m apps.agent.agents.wiki                 # print Mermaid to stdout
+    python -m apps.agent.agents.wiki --out FILE.mmd  # also write the Mermaid source
+    python -m apps.agent.agents.wiki --png FILE.png  # render a PNG (needs network: mermaid.ink)
 
 Paste the Mermaid into https://mermaid.live or a Markdown ```mermaid block to view it.
 ASCII (``get_graph().draw_ascii()``) is intentionally not offered: grandalf mis-renders

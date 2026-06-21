@@ -76,7 +76,7 @@ def _answer_one(q: dict, app, store) -> dict:
 def run_eval(workers: int = 8) -> None:
     """Answer all questions concurrently against ``DATASET``'s prebuilt wiki (store-based)."""
     from apps.agent import datasets
-    from apps.agent.graph import build_app, nodes
+    from apps.agent.agents.wiki import build_app, nodes
 
     store = datasets.get_store(DATASET)
     if not store.exists():

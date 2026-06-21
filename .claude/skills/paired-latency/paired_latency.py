@@ -42,7 +42,7 @@ def main():
     a = parse_args()
     os.environ["EVAL_DATASET"] = a.dataset
     from apps.agent import core, datasets
-    from apps.agent.graph import build_app
+    from apps.agent.agents.wiki import build_app
 
     qids = json.load(open(a.qids))
     qmap = {q["id"]: q for q in

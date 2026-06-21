@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from src.stella_kb import config
 from src.stella_kb.llm import chat, chat_stream
 
-from ..io import (
+from ...io import (
     cross_ref_partners,
     extract_page_items,
     lookup,
@@ -34,7 +34,7 @@ from ..io import (
     route_lookup,
     trace_links,
 )
-from ..prompts import load as load_prompt
+from ...prompts import load as load_prompt
 from .state import AgentState
 
 PLANNER = load_prompt("planner")
@@ -268,7 +268,8 @@ def _retrieve(ask: str, pages: list, wiki_dir: str | None = None,
     if llm_pages:
         with ThreadPoolExecutor(max_workers=min(_FANOUT, len(llm_pages))) as ex:
             per_page = list(ex.map(extract, llm_pages))
-    ev = [e for page_ev in per_page for e in page_ev] + [e for evlist in det.values() for e in evlist]
+    ev = [e for page_ev in per_page for e in page_ev]
+    ev += [e for evlist in det.values() for e in evlist]
     det_note = f" ({len(det)} page(s) deterministic)" if det else ""
     return ev, f"{len(ev)} fact(s) from {pages}{det_note}"
 
