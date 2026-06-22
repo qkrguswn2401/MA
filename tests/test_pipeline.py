@@ -6,8 +6,8 @@ import operator
 import typing
 
 from apps.agent.core import _renumber
-from apps.agent.graph import build_app
-from apps.agent.graph.state import AgentState
+from apps.agent.backends.wiki import build_app
+from apps.agent.backends.wiki.state import AgentState
 
 
 # --- reducer channels: the parallel branches must MERGE, not overwrite -----------------
@@ -95,7 +95,7 @@ def _stub_ask(system, user, max_tokens):
     """Deterministic LLM stub so the async vs sync drive can be compared without the vLLM.
     Branches on which prompt is passed (planner/router/verifier). Synthesis no longer goes
     through ``_ask`` — it streams via ``chat``/``chat_stream``, stubbed separately below."""
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
 
     if system == nodes.PLANNER:
         return {"plan": [{"ask": "Q", "hint_terms": []}], "thought": "t"}, "raw"
@@ -110,10 +110,11 @@ def test_async_run_matches_sync_run(index, monkeypatch):
     import asyncio
 
     from apps.agent import core
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine
+    from apps.agent.backends.wiki import synthesize as synth_mod
 
-    monkeypatch.setattr(nodes, "_ask", _stub_ask)
-    monkeypatch.setattr(nodes, "chat", lambda *a, **k: "FIXED-ANSWER")  # buffered synthesize()
+    monkeypatch.setattr(engine, "_ask", _stub_ask)                       # planner/router/verifier
+    monkeypatch.setattr(synth_mod, "chat", lambda *a, **k: "FIXED-ANSWER")  # buffered synthesize()
     sync = core.run("Q", index=index)
     asy = asyncio.run(core.arun("Q", index=index))
     assert sync["answer"] == asy["answer"] == "FIXED-ANSWER"
@@ -125,11 +126,12 @@ def test_async_stream_matches_sync_stream(index, monkeypatch):
     import asyncio
 
     from apps.agent import core
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine
+    from apps.agent.backends.wiki import synthesize as synth_mod
 
-    monkeypatch.setattr(nodes, "_ask", _stub_ask)
+    monkeypatch.setattr(engine, "_ask", _stub_ask)
     # synthesize_stream() yields these fragments; the SSE path joins them into the answer
-    monkeypatch.setattr(nodes, "chat_stream", lambda *a, **k: iter(["FIXED-", "ANSWER"]))
+    monkeypatch.setattr(synth_mod, "chat_stream", lambda *a, **k: iter(["FIXED-", "ANSWER"]))
     sync_ev = list(core.stream_run("Q", index=index))
 
     async def collect():
@@ -214,24 +216,24 @@ _ROUTE_IDX = {"pages": {"WACC 페이지": {}}, "alias_index": {}}
 
 
 def test_route_curated_hit_skips_router_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
 
-    monkeypatch.setattr(nodes, "route_lookup", lambda hints, idx, wd: ["WACC 페이지"])
-    monkeypatch.setattr(nodes, "_ask",
+    monkeypatch.setattr(solve, "route_lookup", lambda hints, idx, wd: ["WACC 페이지"])
+    monkeypatch.setattr(engine, "_ask",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("router LLM called")))
     sub = {"ask": "WACC?", "hint_terms": ["WACC"], "mode": "lookup"}
-    picks, path, thought = nodes._route(sub, [], _ROUTE_IDX, "INDEX", wiki_dir=None)
+    picks, path, thought = solve._route(sub, [], _ROUTE_IDX, "INDEX", wiki_dir=None)
     assert picks == ["WACC 페이지"] and "routes.yaml" in thought
 
 
 def test_route_retry_bypasses_shortcut_and_calls_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
 
     # even if the table would hit, a retry (tried non-empty) must diverge via the LLM router
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: ["WACC 페이지"])
-    monkeypatch.setattr(nodes, "_ask", lambda *a, **k: ({"pages": ["WACC 페이지"]}, "raw"))
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: ["WACC 페이지"])
+    monkeypatch.setattr(engine, "_ask", lambda *a, **k: ({"pages": ["WACC 페이지"]}, "raw"))
     sub = {"ask": "WACC?", "hint_terms": ["WACC"], "mode": "lookup"}
-    picks, _, _ = nodes._route(sub, ["WACC 페이지"], _ROUTE_IDX, "INDEX", wiki_dir=None)
+    picks, _, _ = solve._route(sub, ["WACC 페이지"], _ROUTE_IDX, "INDEX", wiki_dir=None)
     assert picks == ["WACC 페이지"]  # came from the LLM path, not the shortcut
 
 
@@ -240,39 +242,39 @@ _CX_IDX = {"pages": {"FDD1": {"source": "PDF", "derives_from": [{"page": "E1", "
 
 
 def test_route_cross_ref_pairing_on(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_cross_ref_pairing", lambda: True)
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: ["FDD1"])
-    monkeypatch.setattr(nodes, "_ask",
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: ["FDD1"])
+    monkeypatch.setattr(engine, "_ask",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM called")))
     sub = {"ask": "reconcile", "hint_terms": ["x"], "mode": "lookup"}
-    picks, _, thought = nodes._route(sub, [], _CX_IDX, "INDEX", wiki_dir=None)
+    picks, _, thought = solve._route(sub, [], _CX_IDX, "INDEX", wiki_dir=None)
     assert "FDD1" in picks and "E1" in picks       # both the FDD page and its Excel source opened
     assert "cross-ref" in thought
 
 
 def test_route_no_cross_ref_pairing_when_off(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_cross_ref_pairing", lambda: False)
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: ["FDD1"])
-    monkeypatch.setattr(nodes, "_ask",
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: ["FDD1"])
+    monkeypatch.setattr(engine, "_ask",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM called")))
     sub = {"ask": "x", "hint_terms": ["x"], "mode": "lookup"}
-    picks, _, _ = nodes._route(sub, [], _CX_IDX, "INDEX", wiki_dir=None)
+    picks, _, _ = solve._route(sub, [], _CX_IDX, "INDEX", wiki_dir=None)
     assert picks == ["FDD1"]                        # partner NOT attached when flag off
 
 
 def test_route_miss_falls_back_to_llm(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
 
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: [])  # no curated hit
-    monkeypatch.setattr(nodes, "_ask", lambda *a, **k: ({"pages": ["WACC 페이지"]}, "raw"))
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: [])  # no curated hit
+    monkeypatch.setattr(engine, "_ask", lambda *a, **k: ({"pages": ["WACC 페이지"]}, "raw"))
     sub = {"ask": "WACC?", "hint_terms": ["WACC"], "mode": "lookup"}
-    picks, _, _ = nodes._route(sub, [], _ROUTE_IDX, "INDEX", wiki_dir=None)
+    picks, _, _ = solve._route(sub, [], _ROUTE_IDX, "INDEX", wiki_dir=None)
     assert picks == ["WACC 페이지"]
 
 
@@ -282,33 +284,33 @@ _MULTI_IDX = {"pages": {f"P{i}": {} for i in range(6)}, "alias_index": {}}
 
 
 def test_router_opens_up_to_top_k_pages(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_router_top_k", lambda: 4)
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: [])
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: [])
     # LLM returns 6 valid pages — must be capped to top_k=4, order preserved
-    monkeypatch.setattr(nodes, "_ask",
+    monkeypatch.setattr(engine, "_ask",
                         lambda *a, **k: ({"pages": [f"P{i}" for i in range(6)]}, "raw"))
     sub = {"ask": "여러 페이지에 흩어진 값", "hint_terms": [], "mode": "lookup"}
-    picks, _, _ = nodes._route(sub, [], _MULTI_IDX, "INDEX", wiki_dir=None)
+    picks, _, _ = solve._route(sub, [], _MULTI_IDX, "INDEX", wiki_dir=None)
     assert picks == ["P0", "P1", "P2", "P3"]
 
 
 def test_router_cap_also_bounds_curated_routes(monkeypatch):
-    from apps.agent.graph import nodes
+    from apps.agent.backends.wiki import engine, nodes, solve
     from src.stella_kb import config
 
     monkeypatch.setattr(config, "agent_router_top_k", lambda: 2)
-    monkeypatch.setattr(nodes, "route_lookup", lambda *a, **k: ["P0", "P1", "P2"])
-    monkeypatch.setattr(nodes, "_ask",
+    monkeypatch.setattr(solve, "route_lookup", lambda *a, **k: ["P0", "P1", "P2"])
+    monkeypatch.setattr(engine, "_ask",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM called")))
     sub = {"ask": "x", "hint_terms": ["t"], "mode": "lookup"}
-    picks, _, _ = nodes._route(sub, [], _MULTI_IDX, "INDEX", wiki_dir=None)
+    picks, _, _ = solve._route(sub, [], _MULTI_IDX, "INDEX", wiki_dir=None)
     assert picks == ["P0", "P1"]  # curated list capped too
 
 
-# --- committed curation: version-token → curation/<version>/{decks,routes}.yaml --------
+# --- committed curation: version-token → data/<version>/{decks,routes}.yaml --------
 
 def test_version_token_handles_data_and_wiki_dirs():
     from src.stella_kb.config import _version_token
@@ -322,7 +324,7 @@ def test_curation_paths_default_into_committed_tree(monkeypatch):
 
     monkeypatch.delenv("MNA_WIKI_DECKS", raising=False)
     monkeypatch.delenv("MNA_AGENT_ROUTES", raising=False)
-    monkeypatch.setattr(config, "curation_dir", lambda: __import__("pathlib").Path("curation"))
+    monkeypatch.setattr(config, "curation_dir", lambda: __import__("pathlib").Path("data"))
     monkeypatch.setattr(config, "wiki_data_dir", lambda: __import__("pathlib").Path("data/v0.2"))
-    assert config.wiki_decks_yaml().as_posix() == "curation/v0.2/decks.yaml"
-    assert config.agent_routes_yaml("data/v0.2/wiki").as_posix() == "curation/v0.2/routes.yaml"
+    assert config.wiki_decks_yaml().as_posix() == "data/v0.2/decks.yaml"
+    assert config.agent_routes_yaml("data/v0.2/wiki").as_posix() == "data/v0.2/routes.yaml"

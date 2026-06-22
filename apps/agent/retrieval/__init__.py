@@ -1,4 +1,4 @@
-"""Wiki I/O — deterministic access to the built wiki (``data/wiki/``). No LLM here."""
+"""Wiki retrieval — deterministic access to the built wiki (``data/wiki/``). No LLM here."""
 
 from .tools import (
     INDEX_JSON,

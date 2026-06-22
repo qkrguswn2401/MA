@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Drive the handoff-tool supervisor (apps.agent.supervisor) on one question from the CLI.
+# Drive the supervisor StateGraph (apps.agent.backends.supervisor) on one question from the CLI.
 #
-# The supervisor hands a tool-calling gemma-4 (:8001) two tools — consult_centroid_wiki and
-# consult_dart — lets it pick (or call both), then composes the final Korean answer. So it
-# needs: the wiki built (data/wiki/index.json), the vLLM up, and — for DART questions — the
-# DART_MCP_TOKEN to reach the shared DART MCP server (else the dart tool 503s; wiki unaffected).
+# The supervisor node routes (via a JSON decision on gemma-4 :8001 — no tool-calling) to the
+# wiki/dart worker nodes via Command(goto=…); a single source is passed through verbatim, two
+# sources get an LLM merge. So it needs: the wiki built (data/wiki/index.json), the vLLM up,
+# and — for DART questions — the DART_MCP_TOKEN to reach the shared DART MCP server (else the
+# dart worker errors and the graph falls back to wiki; wiki questions unaffected).
 #
 # Usage (from anywhere):
 #     scripts/run_supervisor.sh "센트로이드 기업가치는 얼마인가요?"
@@ -33,4 +34,4 @@ if ! "$PY" -c "import sys; from apps.agent import datasets; sys.exit(0 if datase
   exit 1
 fi
 
-exec "$PY" -m apps.agent.supervisor "$@"
+exec "$PY" -m apps.agent.backends.supervisor "$@"

@@ -1,7 +1,7 @@
 # Curated first-layer deck index for the v0.1 corpus (the Stella FDD Executive Summary PDF that
 # accompanies the canonical 63-sheet Centroid valuation model).
 #
-# Read at BUILD time, per dataset version: curation/<version>/decks.yaml (committed; env
+# Read at BUILD time, per dataset version: data/<version>/decks.yaml (committed; env
 # MNA_WIKI_DECKS overrides with an explicit file). The PDF build (src/stella_kb/wiki/pdf_pages.py
 # :: build_document) reads this to OVERRIDE the LLM-synthesized document node. Precedence per
 # field: curated (here) > LLM > default. Pin both title and description and the LLM call is

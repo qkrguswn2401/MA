@@ -1,6 +1,6 @@
 # Curated routing table for the v0.1 dataset (canonical 63-sheet Centroid valuation model +
-# the Stella FDD ExecSummary). The LATENCY shortcut — see curation/v0.2/routes.yaml for the
-# full contract. Read at QUERY time by apps/agent/io/tools.py :: route_lookup.
+# the Stella FDD ExecSummary). The LATENCY shortcut — see data/v0.2/routes.yaml for the
+# full contract. Read at QUERY time by apps/agent/retrieval/tools.py :: route_lookup.
 #
 # Format:  <hint term>: [<exact page name>, ...]  (bare string = one page). Keys match a
 # sub-question's hint_terms by EXACT normalized term (not substring), so only add terms unique

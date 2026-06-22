@@ -46,10 +46,11 @@ agent:
                                  # of an LLM call per structured page; off pending a quality A/B
   # routes:                 # env: MNA_AGENT_ROUTES — explicit routes.yaml (single-dataset only)
 
-# Hand-authored, version-controlled curation (committed, unlike data/): per dataset version
-# under curation/<version>/ — decks.yaml (build-time deck descriptions) + routes.yaml (query-time
-# routing shortcuts). See src/stella_kb/config.py: curation_dir / wiki_decks_yaml / agent_routes_yaml.
+# Hand-authored, version-controlled curation: per dataset version under data/<version>/ —
+# decks.yaml (build-time deck descriptions) + routes.yaml (query-time routing shortcuts). These
+# are committed even though the rest of data/ is gitignored (a .gitignore exception keeps the two
+# yamls tracked). See src/stella_kb/config.py: curation_dir / wiki_decks_yaml / agent_routes_yaml.
 # Paths resolve per-version from the wiki/data dir; envs MNA_AGENT_ROUTES / MNA_WIKI_DECKS pin an
 # explicit file and are SINGLE-DATASET only (they override the per-version resolution for all).
 curation:
-  dir: curation             # env: MNA_CURATION_DIR
+  dir: data                 # env: MNA_CURATION_DIR — per-version files live at data/<version>/

@@ -83,7 +83,7 @@ def _link_target(raw: str) -> str:
 def _page_items(page_md: str) -> list[dict]:
     """Pull ``value [cell]`` rows from a page's markdown table(s) → ``[{term, period, value}]``.
 
-    Mirrors ``apps.agent.io.tools.extract_page_items`` (kept local so ``src/stella_kb`` stays
+    Mirrors ``apps.agent.retrieval.tools.extract_page_items`` (kept local so ``src/stella_kb`` stays
     free of an ``apps/`` import) — the compile step renders every fact as ``value [cell]`` in a
     pipe table with a header row, so this is an exact, LLM-free read of what the page asserts.
     """

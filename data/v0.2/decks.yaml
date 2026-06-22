@@ -8,7 +8,7 @@
 #
 # Keys = deck id (PDF stem minus _pages: CAESAR_pages.pdf -> CAESAR). The per-page ToC
 # (lower layer) is always derived from the pages and is not configured here.
-# Read at BUILD time, per dataset version: curation/<version>/decks.yaml (committed; env
+# Read at BUILD time, per dataset version: data/<version>/decks.yaml (committed; env
 # MNA_WIKI_DECKS overrides with an explicit file). Build-time quality/determinism — orthogonal
 # to routes.yaml (which is the query-time latency shortcut).
 

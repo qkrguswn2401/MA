@@ -100,7 +100,7 @@ def agent_cross_ref_pairing() -> bool:
 
 def agent_deterministic_retrieve() -> bool:
     """When true, the retriever first tries a **deterministic** parse of a page's ``value [cell]``
-    table (``io.tools.extract_page_items``) and, on a hit, skips that page's LLM extraction — a
+    table (``retrieval.tools.extract_page_items``) and, on a hit, skips that page's LLM extraction — a
     latency win for already-structured pages. Pages with no parseable table fall back to the LLM.
     Default **off** — it changes evidence selection, so enable only after a clean quality A/B."""
     return get("agent", "deterministic_retrieve", env="MNA_DET_RETRIEVE",
@@ -203,15 +203,16 @@ def wiki_pdf_dir() -> Path:
 
 def curation_dir() -> Path:
     """Repo-tracked root for hand-authored, **version-controlled** curation, laid out per dataset
-    version: ``curation/<version>/{decks,routes}.yaml``. Lives outside ``data/``/``test_data/``
-    (both gitignored), so a fresh checkout has the curation — unlike the regenerable build tree.
-    Override the root with env ``MNA_CURATION_DIR`` / yaml ``curation.dir``."""
-    return Path(get("curation", "dir", env="MNA_CURATION_DIR", default=str(ROOT / "curation")))
+    version: ``data/<version>/{decks,routes}.yaml`` — co-located with each version's build. These
+    two yamls stay committed via a ``.gitignore`` exception even though the rest of ``data/`` is
+    ignored (regenerable), so a fresh checkout still has the curation. Override the root with env
+    ``MNA_CURATION_DIR`` / yaml ``curation.dir``."""
+    return Path(get("curation", "dir", env="MNA_CURATION_DIR", default=str(ROOT / "data")))
 
 
 def _version_token(d: Path | str) -> str:
     """Dataset-version token from a data/wiki dir, per the ``data/<version>/wiki`` convention:
-    ``data/v0.2`` → ``v0.2`` and ``data/v0.2/wiki`` → ``v0.2``. Names the ``curation/<version>/``
+    ``data/v0.2`` → ``v0.2`` and ``data/v0.2/wiki`` → ``v0.2``. Names the ``data/<version>/``
     subdir that pairs with the build/dataset."""
     p = Path(d)
     return p.parent.name if p.name == "wiki" else p.name
@@ -221,7 +222,7 @@ def wiki_decks_yaml() -> Path:
     """Curated **first-layer** deck index the PDF build reads to override the LLM-synthesized
     document node (per-deck ``title``/``description``). A hand-authored, git-committed input —
     precedence is curated > LLM > default — so the upper layer is deterministic and auditable
-    (OpenKB curated-whitelist pattern). Default ``curation/<version>/decks.yaml`` (version from
+    (OpenKB curated-whitelist pattern). Default ``data/<version>/decks.yaml`` (version from
     the build's ``MNA_WIKI_DATA`` dir); explicit file via env ``MNA_WIKI_DECKS``; absent = pure
     LLM."""
     return Path(get("wiki", "decks", env="MNA_WIKI_DECKS",
@@ -257,7 +258,7 @@ def agent_wiki_dir() -> Path:
 
 def agent_routes_yaml(wiki_dir: str | Path | None = None) -> Path:
     """Curated routing table for the query agent — ``term → page(s)`` so a hit skips the router
-    LLM. Resolved **per dataset**: ``curation/<version>/routes.yaml`` (version from the served
+    LLM. Resolved **per dataset**: ``data/<version>/routes.yaml`` (version from the served
     ``wiki_dir``, default the process wiki). Committed alongside ``decks.yaml``. An explicit env
     ``MNA_AGENT_ROUTES`` file overrides for single-dataset serving (don't set it when serving
     several datasets — it would force one table for all). Absent = pure-LLM routing."""

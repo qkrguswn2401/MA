@@ -1,22 +1,37 @@
 # Agent graph
 
-The query agent (`apps/agent`) is **two backends behind a handoff-tool supervisor**.
+The query agent (`apps/agent`) is **two backends behind a supervisor `StateGraph`**.
 `core.answer(source)` dispatches by `source`:
 
-- **`auto`** (default) — the **supervisor** (`apps/agent/supervisor.py`): a tool-calling
-  gemma-4 (:8001) with two handoff tools, `consult_centroid_wiki` and `consult_dart`. It
-  decides which to call (or **both** for a composite cross-source question), then composes the
-  final Korean answer itself.
+- **`auto`** (default) — the **supervisor** (`apps/agent/backends/supervisor.py`): a LangGraph
+  `StateGraph` whose `supervisor` node routes to `wiki`/`dart` worker nodes via
+  `Command(goto=…)`; the workers hand control back, and the supervisor calls the other (or
+  **both** for a composite cross-source question) before finishing at a `compose` node. The
+  supervisor *decides* with a plain JSON completion (stdlib `chat`, like `route()`), **not**
+  tool-calling.
 - **`wiki`** — straight to the Centroid KB LangGraph, **bypassing the supervisor** (the eval
   path is unchanged).
 - **`dart`** — straight to the DART tool-calling agent.
 
 `core.route()` (the old LLM wiki-vs-dart classifier) is **kept only as the supervisor's
-fallback** — used when the tool-calling round fails or the supervisor calls no tool, so a flaky
+fallback** — used when the graph round fails or returns an ungrounded result, so a flaky
 round never hard-fails or returns an ungrounded guess.
 
+**`compose` preserves provenance.** A single-worker answer is returned **verbatim**
+(passthrough — its cell citations survive); only a genuine ≥2-source answer gets an LLM merge.
+The buffered path (`ainvoke`) and the *composite* streaming path both end at the same `compose`
+node, so they return the **same** answer (the composite stream replays it as `token` events).
+
+**Streaming fast-path (single-domain wiki).** `astream_supervised()` first runs the cheap
+`route()` classifier: when it returns `wiki` — the overwhelming common case, since `route` flags
+`dart` only when a listed-company name is present and a composite question always names one — it
+**skips the supervisor graph entirely** and streams the wiki worker's *real* `synthesize_stream`
+tokens (true time-to-first-token), saving the supervisor's two serial decision calls
+(decide→call, decide→FINISH). Only `dart`/composite questions take the buffered graph + replay
+path above.
+
 `get_graph()` only sees the *wiki* `StateGraph` — the supervisor tier and the DART branch live
-in `core.py`/`supervisor.py`, outside the compiled graph — so the full architecture is drawn
+in `core.py`/`backends/supervisor.py`, outside the compiled graph — so the full architecture is drawn
 here, not by LangGraph. Interactive view: open [`agent_graph.html`](agent_graph.html) in a
 browser (drag nodes, Cytoscape.js).
 
@@ -33,21 +48,21 @@ flowchart TD;
   AN -- "wiki · explicit (eval path, bypass)" --> WIKI;
   AN -- "dart · explicit (bypass)" --> DART;
 
-  subgraph SUP["supervisor — handoff-tool, two-phase (supervisor.py)"];
+  subgraph SUP["supervisor — StateGraph, Command(goto) routing (backends/supervisor.py)"];
     direction TB;
-    SA["🤖 phase A · dispatch<br/><i>tool-LLM :8001 picks tool(s)</i>"];
-    TW["🛠 consult_centroid_wiki<br/><i>→ core.arun(q, store)</i>"];
-    TD["🛠 consult_dart<br/><i>→ dart_agent._arun(q)</i>"];
-    SA -- "call" --> TW;
-    SA -- "call (or both)" --> TD;
-    SA --> SC["📝 phase B · compose<br/><i>same LLM writes/streams final answer<br/>over gathered tool outputs</i>"];
+    SA["🧭 supervisor node<br/><i>JSON decision (stdlib chat): next ∈ wiki|dart|FINISH</i>"];
+    TW["➡ Command(goto=&quot;wiki&quot;)<br/><i>→ core.arun(next_query, store)</i>"];
+    TD["➡ Command(goto=&quot;dart&quot;)<br/><i>→ dart._arun(next_query)</i>"];
+    SA -- "route" --> TW;
+    SA -- "route (then the other for composite)" --> TD;
+    SA -- "FINISH / capped" --> SC["📝 compose node<br/><i>1 source → passthrough (verbatim)<br/>≥2 → LLM merge · same answer buffered+streamed</i>"];
   end;
-  SUP -. "no tool fired / error → route() fallback" .-> AN;
+  SUP -. "graph error / ungrounded → route() fallback" .-> AN;
 
   TW --> WIKI;
   TD --> DART;
 
-  subgraph WIKI["wiki backend — LangGraph StateGraph (build.py)"];
+  subgraph WIKI["wiki backend — LangGraph StateGraph (backends/wiki/build.py)"];
     direction TB;
     P["🧭 planner<br/><i>question → ordered sub-questions</i>"];
     subgraph SB["solve branch ×N (parallel, ≤4 concurrent)"];
@@ -61,7 +76,7 @@ flowchart TD;
     AU --> SY["📝 synthesize<br/><i>runs AFTER the graph → streamable</i>"];
   end;
 
-  subgraph DART["dart backend — native tool-calling (dart_agent.py)"];
+  subgraph DART["dart backend — native tool-calling (backends/dart.py)"];
     direction TB;
     DA["🤖 create_agent loop<br/><i>tool-LLM :8001 picks a DART tool + args</i>"];
     DT[("DART MCP tools")];
@@ -69,8 +84,8 @@ flowchart TD;
     DT -. "tool result" .-> DA;
   end;
 
-  WIKI -. "worker answer (auto)" .-> SC;
-  DART -. "worker answer (auto)" .-> SC;
+  WIKI -. "worker answer → back to supervisor (auto)" .-> SA;
+  DART -. "worker answer → back to supervisor (auto)" .-> SA;
 
   SC --> A(["cited answer + trace"]);
   WIKI --> A;
@@ -78,31 +93,39 @@ flowchart TD;
 ```
 <!-- full-arch:end -->
 
-For the **auto** path the worker answers return to the supervisor (dotted → phase B), which
-composes the final answer; for an **explicit** `source` the backend answer goes straight to the
-output. Deterministic tools (no LLM) on the wiki side: `lookup` (term→page), `open_page`
-(page→facts), `trace_links` (BFS over the formula DAG). On the DART side — and in the supervisor
-tier — the model itself calls the tools: the gemma-4 container is served *with*
-`--tool-call-parser gemma4`, unlike the guest vLLM the wiki retrieval uses.
+For the **auto** path the worker answers return to the supervisor node (dotted → `SA`), which
+routes again — to the other worker for a composite question, or to `compose` to finish; for an
+**explicit** `source` the backend answer goes straight to the output. Deterministic tools (no
+LLM) on the wiki side: `lookup` (term→page), `open_page` (page→facts), `trace_links` (BFS over
+the formula DAG). On the DART side the model itself calls the tools (the gemma-4 container is
+served *with* `--tool-call-parser gemma4`); the **supervisor** itself needs no tool-calling — it
+routes via a plain JSON decision on the same stdlib `chat` the wiki retrieval uses.
 
-## Supervisor — two phases
+## Supervisor — the StateGraph
 
-`supervisor.arun_supervised()` / `astream_supervised()`:
+`supervisor._build_supervisor(store)` compiles `START → supervisor → {wiki|dart} → … → compose
+→ END`. `arun_supervised()` drives it with `ainvoke`; `astream_supervised()` with
+`astream(stream_mode="values")`.
 
-- **Phase A — dispatch.** A LangChain `create_agent` tool loop. The two handoff tools are built
-  per request as closures over the request's `WikiStore` (`store`) — so the per-request dataset
-  threads into the wiki worker, preserving concurrency safety. As each tool runs it appends its
-  worker trace (namespaced `wiki:*` / `dart:*`) and answer to shared lists **in execution order**
-  (no LangChain message parsing).
-- **Phase B — compose.** The same model writes the final Korean answer over the gathered tool
-  outputs. The **buffered** path uses the agent's terminal message; the **streaming** path
-  re-composes via `ChatOpenAI.astream` so tokens stream (mirrors `graph.nodes.synthesize_stream`).
-  Streaming uses `_strip_channel` per delta (channel tokens only, no `.strip()`, or inter-token
-  spaces are lost); full `_clean` runs once on the joined answer.
-- **Fallback.** Phase-A exception, or no tool fired → `route()` + direct dispatch.
+- **`supervisor` node.** Decides the next hop with a JSON completion (`_decide` → stdlib `chat`
+  + `parse_action`): `next ∈ {wiki, dart, FINISH}` plus a tailored `query` for the chosen
+  worker. Returns `Command(goto=…)`. Guards: never re-calls a worker already in `called`, caps
+  at `_MAX_TURNS` visits, and **never finishes empty-handed** — a FINISH before any worker ran
+  is overridden to ground via the wiki.
+- **`wiki` / `dart` worker nodes.** Run the existing backend (`core.arun` / `dart._arun`)
+  on the supervisor's `next_query`, then `Command(goto="supervisor")`. The wiki node is a
+  closure over the per-request `WikiStore` (`store`), so the dataset threads in concurrency-safely.
+  Each appends its worker trace (namespaced `wiki:*` / `dart:*`) + a `[supervisor] result` record
+  via the `operator.add` `trace` channel.
+- **`compose` node (terminal).** **1 source → passthrough** the worker's answer verbatim (keeps
+  its cell citations — no re-prose). **≥2 → LLM merge** over the gathered outputs. No worker ran
+  → `source="none"` (the caller grounds via the wiki). Buffered reads this node's `answer`;
+  streaming replays it as `token` events — so both paths return the **same** text.
+- **Fallback.** Graph exception, or an empty/ungrounded result → `route()` + direct dispatch.
 - **Result.** `{source, answer, trace, steps}`; `source` ∈ `wiki | dart | dart+wiki`. The trace
   interleaves `[supervisor] call/result` with the namespaced worker steps, then `[supervisor]
-  answer`, renumbered to a single sequential `step`.
+  passthrough` / `answer`, renumbered to a single sequential `step`; `steps` counts worker
+  dispatches.
 
 ## Wiki backend — compiled topology
 
@@ -174,7 +197,7 @@ and the per-page extraction stay local inside `solve_node`. They return only the
 
 ## DART backend — tool-calling loop
 
-`dart_agent._arun()` (sync wrapper `run_dart()`) builds a LangChain `create_agent` over the
+`dart._arun()` (sync wrapper `run_dart()`) builds a LangChain `create_agent` over the
 DART MCP tools (fetched from the SSE server with a bearer token) and a tools-capable gemma-4
 model. The model loops: call a DART tool → read the result → call again or answer. Network/LLM
 failures degrade to an error string in the answer rather than raising, so the supervisor/router

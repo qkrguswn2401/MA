@@ -53,6 +53,14 @@ ANSWERS_JSON = EVAL_DIR / "answers.json"
 SCORES_JSON = EVAL_DIR / "scores.json"
 REPORT_MD = EVAL_DIR / "report.md"
 
+# Which agent backend to exercise. "wiki" (default) = the wiki backend directly (the eval
+# path so far). "auto" = the supervisor StateGraph (route → wiki/dart → compose/passthrough) —
+# the path the UI actually uses, which the wiki path leaves UNMEASURED. For this Centroid set
+# the supervisor should route every question to wiki and pass its answer through verbatim, so
+# `auto` ≈ `wiki` is the pass condition; a gap is the regression signal (mis-route or compose
+# erosion). Compare means over runs (the eval is noisy); hold the built pages fixed.
+EVAL_SOURCE = os.environ.get("EVAL_SOURCE", "wiki")
+
 
 # --- stage 1: build the Excel-only wiki over the test workbook --------------------------
 
@@ -281,7 +289,7 @@ def load_questions() -> list[dict]:
 def _point_agent_at_eval_index():
     """Rebind the agent's IO paths to EVAL_DIR and return the loaded eval index dict."""
     from apps.agent import core
-    from apps.agent.io import tools
+    from apps.agent.retrieval import tools
 
     tools.PAGES_DIR = PAGES_DIR            # open_page reads this module global
     tools.INDEX_JSON = INDEX_JSON
@@ -291,21 +299,29 @@ def _point_agent_at_eval_index():
     return json.loads(INDEX_JSON.read_text(encoding="utf-8"))
 
 
-def _answer_one(q: dict, app) -> dict:
+def _answer_one(q: dict, app, source: str = "wiki") -> dict:
     from apps.agent import core
 
+    routed = source
     try:
-        res = core.run(q["question"], max_steps=3, app=app)
+        if source == "auto":            # supervisor StateGraph (its wiki node reuses the rebound
+            res = core.answer(q["question"], source="auto", max_steps=3)   # eval index/pages)
+        else:                           # straight wiki backend, reusing the compiled-once app
+            res = core.run(q["question"], max_steps=3, app=app)
         ans, trace, steps = res["answer"], res.get("trace", []), res.get("steps", 0)
+        routed = res.get("source", source)
+        # worker `route` rows name the pages opened; drop the supervisor's own goto rows
         pages = sorted({e.get("arg") for e in trace
-                        if e.get("action") == "route" and e.get("arg") not in (None, "(none)")})
-        # retrieved context for RAGAS: each evidence cell as one "Page!Cell (term) = value" string
+                        if e.get("action") == "route" and e.get("agent") != "supervisor"
+                        and e.get("arg") not in (None, "(none)")})
+        # retrieved context for RAGAS: each evidence cell as one "Page!Cell (term) = value" string.
+        # Both paths carry it — the supervisor threads the wiki worker's `evidence` through.
         contexts = [_evidence_str(ev) for ev in res.get("evidence", []) if ev]
     except Exception as e:  # noqa: BLE001 — record the failure, keep going
         ans, pages, steps, contexts = f"[ERROR] {type(e).__name__}: {e}", [], 0, []
-    print(f"--- {q['id']} (T{q['tier']})  {ans[:80].replace(chr(10), ' ')}")
+    print(f"--- {q['id']} (T{q['tier']}) [{routed}]  {ans[:72].replace(chr(10), ' ')}")
     return {**q, "agent_answer": ans, "pages_opened": pages, "steps": steps,
-            "retrieved_contexts": contexts}
+            "routed_source": routed, "retrieved_contexts": contexts}
 
 
 def _evidence_str(ev: dict) -> str:
@@ -318,22 +334,27 @@ def _evidence_str(ev: dict) -> str:
     return f"{head} = {val}" if val not in (None, "") else head
 
 
-def run_eval(workers: int = 8) -> None:
+def run_eval(workers: int = 8, source: str | None = None) -> None:
     """Answer all 20 questions concurrently. Questions are independent, so we (1) raise the
     agent's in-flight LLM cap to match the worker count — otherwise the 4-slot default
     ``_LLM_SEM`` throttles the workers — and (2) compile the LangGraph once and reuse it
-    across questions instead of rebuilding it 20×."""
-    from apps.agent import core
-    from apps.agent.graph import build_app, nodes
+    across questions instead of rebuilding it 20×.
 
+    ``source`` (default ``EVAL_SOURCE``) selects the backend: ``"wiki"`` (reuse the compiled
+    ``app``) or ``"auto"`` (the supervisor StateGraph — ``app`` is unused; its wiki node
+    compiles its own from the same rebound eval index)."""
+    from apps.agent import core
+    from apps.agent.backends.wiki import build_app, engine
+
+    source = source or EVAL_SOURCE
     index = _point_agent_at_eval_index()
     qs = load_questions()
     workers = min(workers, len(qs))
-    nodes.set_fanout(config.eval_fanout(default=workers))  # don't starve workers
+    engine.set_fanout(config.eval_fanout(default=workers))  # don't starve workers
     app = build_app(index)                                                # compile once, reuse
-    print(f"answering {len(qs)} questions · {workers} workers · fanout {nodes._FANOUT}")
+    print(f"answering {len(qs)} questions · {workers} workers · fanout {engine._FANOUT} · source={source}")
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        results = list(ex.map(lambda q: _answer_one(q, app), qs))
+        results = list(ex.map(lambda q: _answer_one(q, app, source), qs))
     order = {q["id"]: i for i, q in enumerate(qs)}        # restore original question order
     results.sort(key=lambda r: order[r["id"]])
     EVAL_DIR.mkdir(parents=True, exist_ok=True)

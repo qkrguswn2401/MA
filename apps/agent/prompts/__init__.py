@@ -1,7 +1,7 @@
 """Agent prompt templates, kept out of code (one ``<name>.txt`` per prompt).
 
 Mirrors ``src/stella_kb/prompts`` but scoped to the query agent, so the agent package is
-self-contained. Load with ``load("wiki_agent_system")``; the path resolves relative to
+self-contained. Load with ``load("planner")``; the path resolves relative to
 this folder, so it works regardless of cwd.
 """
 

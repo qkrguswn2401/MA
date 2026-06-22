@@ -7,11 +7,12 @@ time: a LangGraph agent navigates the index and pages to answer M&A valuation qu
 It imports the build library only for the shared LLM client; it never rebuilds the wiki.
 
 Layout:
-    tools.py   deterministic wiki access (load_index, lookup, open_page) — no LLM
-    graph.py   the LangGraph StateGraph (AgentState, build_app)
-    core.py    public API: run / ask / stream_run
-    server.py  FastAPI HTTP API (/ask, /ask/stream SSE)
-    prompts/   the agent system prompt (Korean-steered)
+    core.py       public API / facade: run / ask / answer(router) / stream_run
+    datasets.py   dataset (wiki version) registry + cached WikiStore
+    backends/     the agent backends — supervisor.py · dart.py · wiki/ (LangGraph)
+    retrieval/    deterministic wiki access (lookup / open_page / trace_links) — no LLM
+    api/          FastAPI HTTP API (/ask, /ask/stream SSE, /datasets, /health)
+    prompts/      Korean prompt templates
 
     from apps.agent import ask
     python -m apps.agent "기업가치는 얼마인가요?"

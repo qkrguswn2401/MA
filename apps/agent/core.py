@@ -1,9 +1,9 @@
 """Public API of the wiki query agent: ``run`` / ``ask`` / ``stream_run``.
 
-Each seeds the multi-agent pipeline (``apps.agent.graph``: planner → router → retriever →
+Each seeds the multi-agent pipeline (``apps.agent.backends.wiki``: planner → router → retriever →
 verifier → synthesizer) with the wiki's ``INDEX.md`` table of contents and the question,
 then drives it to a cited Korean answer. The router is handed the ToC and must navigate to
-the right page on its own, using only the deterministic ``apps.agent.io`` reads.
+the right page on its own, using only the deterministic ``apps.agent.retrieval`` reads.
 
   - ``run``         → ``{answer, trace, steps}`` (trace = the per-agent routing record)
   - ``ask``         → just the answer string
@@ -15,9 +15,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from .graph import AgentState, build_app
-from .graph.nodes import synthesize, synthesize_stream
-from .io import INDEX_MD, load_index
+from .backends.wiki import AgentState, build_app
+from .backends.wiki.nodes import synthesize, synthesize_stream
+from .retrieval import INDEX_MD, load_index
 
 
 def route(question: str) -> str:
@@ -26,7 +26,7 @@ def route(question: str) -> str:
     needed); defaults to ``"wiki"`` on any parse/endpoint failure."""
     from src.stella_kb.llm import chat
 
-    from .graph.nodes import parse_action
+    from .backends.wiki.nodes import parse_action
     from .prompts import load as load_prompt
 
     try:
@@ -51,10 +51,10 @@ def answer(question: str, source: str = "auto", max_steps: int = 3,
     ``save=True`` compounds a grounded wiki answer back onto its page (no-op for DART).
     Returns ``{source, answer, trace, steps}`` — same shape for both backends."""
     if source == "auto":
-        from .supervisor import run_supervised  # handoff-tool supervisor (wiki + DART as tools)
+        from .backends.supervisor import run_supervised  # supervisor StateGraph (wiki + DART worker nodes)
         return run_supervised(question, store=store)
     if source == "dart":
-        from .dart_agent import run_dart
+        from .backends.dart import run_dart
         return {"source": "dart", **run_dart(question)}
     return {"source": "wiki",
             **run(question, max_steps=max_steps, verbose=verbose, index=index, store=store,
@@ -164,7 +164,7 @@ def run(question: str, max_steps: int = 3, verbose: bool = False,
     answer, synth_trace = synthesize(final)  # graph ends at auditor; write the answer here
     result = _build_result(final, answer, synth_trace)
     if save:
-        from .io import persist_answer
+        from .retrieval import persist_answer
         result["saved"] = persist_answer(
             question, result["answer"], result["evidence"],
             wiki_dir=(str(store.wiki_dir) if store is not None else None))
@@ -192,14 +192,14 @@ async def arun(question: str, max_steps: int = 3, verbose: bool = False,
 async def aanswer(question: str, source: str = "auto", max_steps: int = 3,
                   verbose: bool = False, index: dict | None = None,
                   store: Any = None) -> dict[str, Any]:
-    """Async twin of :func:`answer`: dispatch by ``source``. ``"auto"`` runs the handoff-tool
-    supervisor (wiki + DART as tools); explicit ``"wiki"``/``"dart"`` go straight to that
+    """Async twin of :func:`answer`: dispatch by ``source``. ``"auto"`` runs the supervisor
+    StateGraph (wiki + DART worker nodes); explicit ``"wiki"``/``"dart"`` go straight to that
     backend (the sync DART agent runs via ``to_thread`` so it doesn't block the loop)."""
     if source == "auto":
-        from .supervisor import arun_supervised  # handoff-tool supervisor (wiki + DART as tools)
+        from .backends.supervisor import arun_supervised  # supervisor StateGraph (wiki + DART worker nodes)
         return await arun_supervised(question, store=store)
     if source == "dart":
-        from .dart_agent import run_dart
+        from .backends.dart import run_dart
         return {"source": "dart", **(await asyncio.to_thread(run_dart, question))}
     return {"source": "wiki",
             **(await arun(question, max_steps=max_steps, verbose=verbose, index=index, store=store))}
@@ -224,9 +224,7 @@ def stream_run(question: str, max_steps: int = 3, index: dict | None = None, sto
         final = state
         trace = state.get("trace", [])
         while emitted < len(trace):                       # surface each routing decision
-            e = dict(trace[emitted])
-            e["step"] = emitted                           # running global step (branches merge)
-            yield {"type": "step", **e}
+            yield {"type": "step", **trace[emitted], "step": emitted}  # running global step (branches merge)
             emitted += 1
     parts: list[str] = []                                 # graph done → stream the answer tokens
     for delta in synthesize_stream(final):
@@ -243,10 +241,10 @@ async def astream_run(question: str, max_steps: int = 3, index: dict | None = No
     the same ``step``/``token``/``answer`` event dicts; LangGraph runs the sync nodes in its
     executor, and the blocking token stream runs in a worker thread via ``_aiter_in_thread``.
 
-    ``source="auto"`` delegates to the handoff-tool supervisor (``supervisor.astream_supervised``),
+    ``source="auto"`` delegates to the supervisor StateGraph (``supervisor.astream_supervised``),
     which yields the same event shape; ``"wiki"`` (the default) streams the wiki graph directly."""
     if source == "auto":
-        from .supervisor import astream_supervised
+        from .backends.supervisor import astream_supervised
         async for ev in astream_supervised(question, store=store):
             yield ev
         return
@@ -258,9 +256,7 @@ async def astream_run(question: str, max_steps: int = 3, index: dict | None = No
         final = state
         trace = state.get("trace", [])
         while emitted < len(trace):
-            e = dict(trace[emitted])
-            e["step"] = emitted
-            yield {"type": "step", **e}
+            yield {"type": "step", **trace[emitted], "step": emitted}
             emitted += 1
     parts: list[str] = []                                 # graph done → stream the answer tokens
     async for delta in _aiter_in_thread(lambda: synthesize_stream(final)):

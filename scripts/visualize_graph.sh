@@ -4,12 +4,12 @@
 #
 # The agent is two backends behind an LLM router (apps/agent/core.py):
 #   answer() → route() ─┬─ wiki  → LangGraph (planner → fan-out solve → synthesizer)
-#                       └─ dart  → tool-calling agent over the DART MCP (dart_agent.py)
+#                       └─ dart  → tool-calling agent over the DART MCP (dart.py)
 # Only the *wiki* StateGraph is a compiled LangGraph; the route tier and the DART branch
 # live in core.py, so get_graph() can't see them. This script therefore emits BOTH:
 #   1. Full architecture (route + both backends) — the source of truth in
 #      docs/agent_graph.md (mermaid + PNG). This is what you usually want.
-#   2. Compiled wiki sub-graph — rendered live from apps.agent.graph.build, so the wiki
+#   2. Compiled wiki sub-graph — rendered live from apps.agent.backends.wiki.build, so the wiki
 #      half is always verified against the committed code (drift check).
 #
 # Outputs:
@@ -53,10 +53,10 @@ print("\n--- Mermaid (FULL architecture: route + wiki + dart) ---")
 print(full_mermaid)
 
 # --- 2. Compiled wiki sub-graph: rendered live from code as a drift check on the wiki half.
-print("\n--- Compiled wiki sub-graph (live from apps.agent.graph.build) ---")
+print("\n--- Compiled wiki sub-graph (live from apps.agent.backends.wiki.build) ---")
 try:
-    from apps.agent.graph import build_app
-    from apps.agent.io import INDEX_JSON, load_index
+    from apps.agent.backends.wiki import build_app
+    from apps.agent.retrieval import INDEX_JSON, load_index
 
     if not INDEX_JSON.exists():
         print("   (skipped — data/wiki/index.json missing; build the wiki first: "

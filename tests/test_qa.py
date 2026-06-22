@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.stella_kb.wiki import qa
-from apps.agent.io.tools import persist_answer
+from apps.agent.retrieval.tools import persist_answer
 
 EV = [{"page": "DCF", "cell": "K59", "term": "EV", "value": "120,696"},
       {"page": "DCF", "cell": "K60", "term": "equity", "value": "206,131"},

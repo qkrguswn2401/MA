@@ -60,13 +60,15 @@ src/stella_kb/        # KB 빌드 파이프라인
   parsers/pdf/        # 비전 기반 PDF 파서 (표·[그래프]·[다이어그램] 추출)
   llm.py  config.py   # OpenAI 호환 vLLM 클라이언트 · 중앙 설정(env > config.yaml > default; 경로 접근자)
 apps/agent/           # 질의 에이전트
-  core.py             # 공개 API: run / ask / answer(라우터) / stream_run — 데이터셋 store 인자
+  core.py             # 공개 API/파사드: run / ask / answer(라우터) / stream_run — backends/ 백엔드로 분기
   datasets.py         # 데이터셋(위키 버전) 레지스트리 + 캐시 WikiStore (id → 위키 디렉터리)
-  graph/              # LangGraph: state · nodes(planner/solve/auditor/synthesizer) · build (wiki_dir 스레딩)
-  io/                 # 결정론적 위키 접근 (lookup, open_page, trace_links, query_ledger)
+  backends/             # 에이전트 백엔드 (core가 여기로 분기)
+    supervisor.py     #   supervisor StateGraph: wiki/dart 워커 라우팅·병합, 스트리밍 fast-path
+    dart.py           #   DART(상장사) tool-calling 백엔드
+    wiki/             #   wiki LangGraph: state · nodes(planner/solve/auditor/synthesizer) · build
+  retrieval/          # 결정론적 위키 접근 (lookup, open_page, trace_links, query_ledger)
   api/                # FastAPI: /ask(GET) · /ask/stream(GET SSE) · /datasets · /health
-  dart_agent.py       # DART(상장사) tool-calling 백엔드
-  prompts/            # 한국어 프롬프트 (route, planner, router, retriever, verifier, synthesizer)
+  prompts/            # 한국어 프롬프트 (route, planner, router, retriever, verifier, synthesizer, supervisor)
 frontend/             # React + Vite 채팅 UI (SSE) · DatasetPicker(버전 선택) · API 프록시
 mcps/dart-mcp/        # 벤더링한 DART 공시 MCP 서버 (Docker, SSE :8002, 토큰 인증)
 eval/                 # stella_crosscheck(v0.1 tier) · qa_eval(v0.2 비전-QA rubric) · ragas_eval

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from apps.agent.graph.nodes import parse_action
-from apps.agent.io import (
+from apps.agent.backends.wiki.nodes import parse_action
+from apps.agent.retrieval import (
     cross_ref_partners,
     extract_page_items,
     lookup,
@@ -154,7 +154,7 @@ def test_deterministic_retrieve_flag_defaults_off():
 
 # --- route_lookup: curated routes.yaml → pages (deterministic, no LLM) -----------------
 # The routes table is resolved by config.agent_routes_yaml; point it at a tmp file via the
-# MNA_AGENT_ROUTES env override so these stay decoupled from the curation/<version>/ layout.
+# MNA_AGENT_ROUTES env override so these stay decoupled from the data/<version>/ layout.
 
 _IDX = {"pages": {"FDD8 — [CAESAR] WACC": {}, "회사 조직도": {}, "엉뚱페이지": {}}}
 
@@ -194,7 +194,7 @@ def test_committed_routes_targets_exist(version):
 
     from src.stella_kb import ROOT
 
-    routes_path = ROOT / "curation" / version / "routes.yaml"
+    routes_path = ROOT / "data" / version / "routes.yaml"
     index_path = ROOT / "data" / version / "wiki" / "index.json"
     if not routes_path.exists() or not index_path.exists():
         pytest.skip(f"{version}: routes or built index absent")

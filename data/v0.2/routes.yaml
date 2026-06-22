@@ -1,7 +1,7 @@
 # Curated routing table for the v0.2 dataset — the LATENCY shortcut.
 #
-# Read at QUERY time by the agent (apps/agent/io/tools.py :: route_lookup), per dataset version:
-# curation/<version>/routes.yaml (committed; env MNA_AGENT_ROUTES overrides with an explicit
+# Read at QUERY time by the agent (apps/agent/retrieval/tools.py :: route_lookup), per dataset version:
+# data/<version>/routes.yaml (committed; env MNA_AGENT_ROUTES overrides with an explicit
 # file). When a sub-question's hint_terms hit a key here, the agent uses the
 # listed page(s) directly and SKIPS the router LLM call (and a curated-correct page avoids a
 # gap→retry round) — that's the search-time saving. A miss falls back to the LLM router, so

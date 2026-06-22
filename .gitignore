@@ -8,8 +8,13 @@ __pycache__/
 .pytest_cache/
 
 # Data: the workbook (binary, diffs not meaningful) and all regenerable build
-# artifacts (parsed/, wiki/, md/, *.json, *.graphml). Commit src/, not data/.
-data/
+# artifacts (parsed/, wiki/, md/, *.json, *.graphml). Commit src/, not data/ — EXCEPT the
+# hand-authored per-version curation (data/<version>/{decks,routes}.yaml), which IS committed.
+data/*
+!data/*/
+data/*/*
+!data/*/decks.yaml
+!data/*/routes.yaml
 
 # CONFIDENTIAL client material — NDA FDD reports + valuation models (Project Stella /
 # Project Caesar). NEVER commit or push. Also the vision-parse cache (extracted PDF
